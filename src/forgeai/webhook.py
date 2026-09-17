@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import re
 from dataclasses import dataclass
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError
+
 from forgeai.config import Settings
 from forgeai.control_models import ReviewJobRequest, new_job_id
 from forgeai.db import Database
-from forgeai.repository import ControlPlaneRepository
 from forgeai.queue import JobQueue
+from forgeai.repository import ControlPlaneRepository
 
 SUPPORTED_ACTIONS = frozenset({"opened", "reopened", "synchronize", "ready_for_review"})
 _DELIVERY_ID_RE = re.compile(r"^[A-Za-z0-9-]{8,128}$")
@@ -123,27 +126,40 @@ class GitHubWebhookService:
                 trigger_source=f"github:{event.event_type}:{event.action}",
                 delivery_id=delivery_id,
             )
-            await self.repository.create_job(
-                session,
-                job_id,
-                event.repository,
-                event.pull_request,
-                job_request.model_dump(mode="json"),
-                commit=False,
-            )
-            await self.repository.create_webhook_delivery(
-                session,
-                delivery_id,
-                event.event_type,
-                event.action,
-                event.repository,
-                event.pull_request,
-                payload,
-                "pending",
-                job_id=job_id,
-                commit=False,
-            )
-            await session.commit()
+            try:
+                await self.repository.create_job(
+                    session,
+                    job_id,
+                    event.repository,
+                    event.pull_request,
+                    job_request.model_dump(mode="json"),
+                    commit=False,
+                )
+                await self.repository.create_webhook_delivery(
+                    session,
+                    delivery_id,
+                    event.event_type,
+                    event.action,
+                    event.repository,
+                    event.pull_request,
+                    payload,
+                    "pending",
+                    job_id=job_id,
+                    commit=False,
+                )
+                await session.commit()
+            except IntegrityError:
+                await session.rollback()
+                existing = await self.repository.get_webhook_delivery(session, delivery_id)
+                if existing is None:
+                    raise
+                return {
+                    "accepted": existing.status not in {"ignored", "dead_lettered"},
+                    "duplicate": True,
+                    "delivery_id": delivery_id,
+                    "status": existing.status,
+                    "job_id": existing.job_id,
+                }
 
         return {
             "accepted": True,
@@ -186,19 +202,13 @@ class WebhookDispatcher:
             dispatched += 1
         return dispatched
 
-    async def run_forever(self, stop_event) -> None:
+    async def run_forever(self, stop_event: asyncio.Event) -> None:
         while not stop_event.is_set():
             await self.dispatch_pending_once()
             try:
-                await asyncio_wait(stop_event, self.settings.webhook_dispatch_interval_seconds)
-            except TimeoutError:
+                await asyncio.wait_for(
+                    stop_event.wait(),
+                    timeout=max(self.settings.webhook_dispatch_interval_seconds, 0.1),
+                )
+            except asyncio.TimeoutError:
                 continue
-
-
-async def asyncio_wait(stop_event, timeout: float) -> None:
-    import asyncio
-
-    try:
-        await asyncio.wait_for(stop_event.wait(), timeout=max(timeout, 0.1))
-    except asyncio.TimeoutError as exc:
-        raise TimeoutError from exc
