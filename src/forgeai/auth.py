@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from fastapi import Depends, Header, HTTPException
 
@@ -37,7 +37,10 @@ def authenticate(
     settings: Settings,
 ) -> Principal:
     if not settings.auth_required:
-        return Principal(key_id="development", roles=frozenset({ROLE_READER, ROLE_REVIEWER, ROLE_OPERATOR}))
+        return Principal(
+            key_id="development",
+            roles=frozenset({ROLE_READER, ROLE_REVIEWER, ROLE_OPERATOR}),
+        )
 
     token = _parse_bearer(authorization)
     digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
