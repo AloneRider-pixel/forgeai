@@ -33,7 +33,12 @@ from forgeai.services.planner import DeterministicPlanner, OpenAICompatiblePlann
 from forgeai.services.review_engine import build_report
 from forgeai.services.review_service import ReviewService
 from forgeai.tool_gateway import ToolGateway, ToolPolicyError
-from forgeai.webhook import GitHubWebhookService, WebhookDispatcher, WebhookValidationError, verify_signature
+from forgeai.webhook import (
+    GitHubWebhookService,
+    WebhookDispatcher,
+    WebhookValidationError,
+    verify_signature,
+)
 
 settings = get_settings()
 configure_tracing()
