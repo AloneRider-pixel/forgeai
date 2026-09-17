@@ -1,0 +1,1 @@
+Superseded by tests/test_api_smoke.py.
