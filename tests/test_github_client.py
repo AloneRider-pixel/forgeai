@@ -1,7 +1,7 @@
 import httpx
 
 from forgeai.models import PullRequestSnapshot
-from forgeai.services.github_client import GitHubClient, GitHubAPIError
+from forgeai.services.github_client import GitHubAPIError, GitHubClient
 
 
 def test_get_pull_request_parses_metadata_and_files() -> None:
@@ -18,10 +18,15 @@ def test_get_pull_request_parses_metadata_and_files() -> None:
                     "changed_files": 2,
                 },
             )
-        return httpx.Response(200, json=[{"filename": "src/auth.py"}, {"filename": "tests/test_auth.py"}])
+        return httpx.Response(
+            200,
+            json=[{"filename": "src/auth.py"}, {"filename": "tests/test_auth.py"}],
+        )
 
     client = GitHubClient()
-    client._client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    client._client = httpx.Client(
+        transport=httpx.MockTransport(handler), base_url="https://api.github.com"
+    )
 
     snapshot = client.get_pull_request("octocat/hello-world", 42)
 
@@ -48,11 +53,16 @@ def test_changed_files_are_paginated() -> None:
         page = int(request.url.params.get("page", "1"))
         requests.append(page)
         if page == 1:
-            return httpx.Response(200, json=[{"filename": f"src/file_{index}.py"} for index in range(100)])
+            return httpx.Response(
+                200,
+                json=[{"filename": f"src/file_{index}.py"} for index in range(100)],
+            )
         return httpx.Response(200, json=[{"filename": "src/last.py"}])
 
     client = GitHubClient()
-    client._client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    client._client = httpx.Client(
+        transport=httpx.MockTransport(handler), base_url="https://api.github.com"
+    )
 
     snapshot = client.get_pull_request("octocat/hello-world", 42)
 
@@ -69,7 +79,9 @@ def test_malformed_changed_file_raises() -> None:
         return httpx.Response(200, json=[{"not_filename": "src/bad.py"}])
 
     client = GitHubClient()
-    client._client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    client._client = httpx.Client(
+        transport=httpx.MockTransport(handler), base_url="https://api.github.com"
+    )
 
     try:
         client.get_pull_request("octocat/hello-world", 42)
