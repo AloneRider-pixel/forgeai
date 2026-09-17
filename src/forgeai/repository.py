@@ -17,7 +17,13 @@ from forgeai.control_models import (
     JobStatus,
     ReviewJobResponse,
 )
-from forgeai.db_models import ApprovalRecord, EvidenceRecord, ReviewJobRecord, WebhookDeliveryRecord
+from forgeai.db_models import (
+    ApprovalRecord,
+    EvidenceRecord,
+    RepositoryDocumentRecord,
+    ReviewJobRecord,
+    WebhookDeliveryRecord,
+)
 
 
 class ControlPlaneRepository:
@@ -155,6 +161,59 @@ class ControlPlaneRepository:
         )
         await session.commit()
         return execution_id
+
+    async def upsert_repository_documents(
+        self,
+        session: AsyncSession,
+        repository: str,
+        ref: str,
+        documents: list[dict[str, Any]],
+    ) -> int:
+        count = 0
+        now = datetime.now(UTC)
+        for item in documents:
+            path = str(item["path"])
+            result = await session.execute(
+                select(RepositoryDocumentRecord).where(
+                    RepositoryDocumentRecord.repository == repository,
+                    RepositoryDocumentRecord.ref == ref,
+                    RepositoryDocumentRecord.path == path,
+                )
+            )
+            record = result.scalar_one_or_none()
+            if record is None:
+                record = RepositoryDocumentRecord(
+                    repository=repository,
+                    ref=ref,
+                    path=path,
+                    sha=str(item.get("sha", "")),
+                    content=str(item.get("content", "")),
+                    embedding_json=list(item.get("embedding", [])),
+                    updated_at=now,
+                )
+                session.add(record)
+            else:
+                record.sha = str(item.get("sha", ""))
+                record.content = str(item.get("content", ""))
+                record.embedding_json = list(item.get("embedding", []))
+                record.updated_at = now
+            count += 1
+        await session.commit()
+        return count
+
+    async def list_repository_documents(
+        self, session: AsyncSession, repository: str, ref: str, limit: int = 1000
+    ) -> list[RepositoryDocumentRecord]:
+        result = await session.execute(
+            select(RepositoryDocumentRecord)
+            .where(
+                RepositoryDocumentRecord.repository == repository,
+                RepositoryDocumentRecord.ref == ref,
+            )
+            .order_by(RepositoryDocumentRecord.path.asc())
+            .limit(limit)
+        )
+        return list(result.scalars())
 
     async def get_webhook_delivery(
         self, session: AsyncSession, delivery_id: str

@@ -11,13 +11,16 @@ class Base(DeclarativeBase):
 
 
 class Database:
-    def __init__(self, url: str) -> None:
+    def __init__(self, url: str, auto_create_schema: bool = True) -> None:
         self.engine = create_async_engine(url, pool_pre_ping=True)
         self.sessions = async_sessionmaker(self.engine, expire_on_commit=False)
+        self.auto_create_schema = auto_create_schema
 
     async def init(self) -> None:
         from forgeai import db_models  # noqa: F401
 
+        if not self.auto_create_schema:
+            return
         async with self.engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
 

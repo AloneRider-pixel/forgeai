@@ -106,3 +106,19 @@ class WebhookDeliveryRecord(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     job: Mapped[ReviewJobRecord | None] = relationship(back_populates="webhook_deliveries")
+
+
+class RepositoryDocumentRecord(Base):
+    __tablename__ = "repository_documents"
+    __table_args__ = (
+        UniqueConstraint("repository", "ref", "path", name="uq_repository_document"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    repository: Mapped[str] = mapped_column(String(200), index=True)
+    ref: Mapped[str] = mapped_column(String(200), index=True)
+    path: Mapped[str] = mapped_column(String(1000))
+    sha: Mapped[str] = mapped_column(String(100), default="")
+    content: Mapped[str] = mapped_column(Text)
+    embedding_json: Mapped[list[float]] = mapped_column(JSON, default=list)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

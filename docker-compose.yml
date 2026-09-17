@@ -1,18 +1,36 @@
 services:
+  migrate:
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://forgeai:forgeai@postgres:5432/forgeai
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   api:
     build: .
     ports:
       - "8000:8000"
     environment:
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
       RISK_GATE_THRESHOLD: ${RISK_GATE_THRESHOLD:-60}
       HTTP_TIMEOUT_SECONDS: ${HTTP_TIMEOUT_SECONDS:-15}
       DATABASE_URL: postgresql+asyncpg://forgeai:forgeai@postgres:5432/forgeai
+      AUTO_CREATE_SCHEMA: "false"
       REDIS_URL: redis://redis:6379/0
       ALLOWED_GITHUB_WORKFLOWS: '["ci.yml"]'
+      AUTH_REQUIRED: ${AUTH_REQUIRED:-false}
+      API_KEY_ROLES: ${API_KEY_ROLES:-{}}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+      RETRIEVAL_MAX_FILES: ${RETRIEVAL_MAX_FILES:-200}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_started
 
@@ -21,12 +39,19 @@ services:
     command: ["python", "-m", "forgeai.worker"]
     environment:
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
       DATABASE_URL: postgresql+asyncpg://forgeai:forgeai@postgres:5432/forgeai
+      AUTO_CREATE_SCHEMA: "false"
       REDIS_URL: redis://redis:6379/0
       ALLOWED_GITHUB_WORKFLOWS: '["ci.yml"]'
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+      RETRIEVAL_MAX_FILES: ${RETRIEVAL_MAX_FILES:-200}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_started
 

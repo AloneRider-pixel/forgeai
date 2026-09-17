@@ -4,9 +4,13 @@ from contextlib import contextmanager
 from time import perf_counter
 
 from opentelemetry import trace
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from prometheus_client import Counter, Histogram, generate_latest
+
+from forgeai.config import Settings
 
 SERVICE_NAME = "forgeai"
 
@@ -19,8 +23,12 @@ _review_duration = Histogram(
 )
 
 
-def configure_tracing() -> None:
+def configure_tracing(settings: Settings) -> None:
     provider = TracerProvider(resource=Resource.create({"service.name": SERVICE_NAME}))
+    if settings.otel_exporter_otlp_endpoint:
+        provider.add_span_processor(
+            BatchSpanProcessor(OTLPSpanExporter(endpoint=settings.otel_exporter_otlp_endpoint))
+        )
     trace.set_tracer_provider(provider)
 
 
@@ -29,10 +37,13 @@ def metrics_payload() -> tuple[bytes, str]:
 
 
 @contextmanager
-def review_span(job_id: str):
+def review_span(job_id: str, attributes: dict[str, object] | None = None):
     _reviews_started.inc()
     tracer = trace.get_tracer(SERVICE_NAME)
-    with tracer.start_as_current_span("forgeai.review", attributes={"job.id": job_id}):
+    span_attributes = {"job.id": job_id}
+    if attributes:
+        span_attributes.update(attributes)
+    with tracer.start_as_current_span("forgeai.review", attributes=span_attributes):
         started = perf_counter()
         try:
             yield
