@@ -1,8 +1,21 @@
+import asyncio
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
+from fastapi.responses import JSONResponse
 
 from forgeai.config import get_settings
+from forgeai.control_models import (
+    ApprovalDecisionRequest,
+    ApprovalState,
+    EvidenceBatchRequest,
+    ExecutionRequest,
+    ExecutionResponse,
+    JobDetailResponse,
+    ReviewJobRequest,
+    ReviewJobResponse,
+)
+from forgeai.db import Database
 from forgeai.models import (
     AssistedReviewReport,
     AssistedReviewRequest,
@@ -10,29 +23,67 @@ from forgeai.models import (
     PullRequestSnapshot,
     ReviewReport,
 )
-from forgeai.services.analyzer import analyze
+from forgeai.observability import configure_tracing, metrics_payload, review_span
+from forgeai.queue import InMemoryJobQueue, RedisJobQueue, queue_health
+from forgeai.repository import ControlPlaneRepository
 from forgeai.services.context import collect_context
 from forgeai.services.github_client import GitHubAPIError, GitHubClient
 from forgeai.services.planner import DeterministicPlanner, OpenAICompatiblePlanner
-from forgeai.services.risk import calculate_score, gate_decision
+from forgeai.services.review_engine import build_report
+from forgeai.services.review_service import ReviewService
+from forgeai.tool_gateway import ToolGateway, ToolPolicyError
 
 settings = get_settings()
+configure_tracing()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.github_client = GitHubClient(
-        token=settings.github_token,
-        timeout=settings.http_timeout_seconds,
-    )
+    database = Database(settings.database_url)
+    await database.init()
+    github = GitHubClient(token=settings.github_token, timeout=settings.http_timeout_seconds)
+    queue = RedisJobQueue(settings.redis_url) if settings.redis_url else InMemoryJobQueue()
+    service = ReviewService(database, github, settings)
+    app.state.database = database
+    app.state.github_client = github
+    app.state.job_queue = queue
+    app.state.review_service = service
+    app.state.tool_gateway = ToolGateway(github, settings)
+
+    worker_task = None
+    if isinstance(queue, InMemoryJobQueue):
+
+        async def local_worker() -> None:
+            while True:
+                job_id = await queue.dequeue(timeout=5)
+                if not job_id:
+                    continue
+                try:
+                    with review_span(job_id):
+                        await service.process(job_id)
+                except Exception:
+                    continue
+
+        worker_task = asyncio.create_task(local_worker())
+
     yield
-    app.state.github_client.close()
+
+    if worker_task:
+        worker_task.cancel()
+        try:
+            await worker_task
+        except asyncio.CancelledError:
+            pass
+    github.close()
+    if isinstance(queue, RedisJobQueue):
+        await queue.close()
+    await database.close()
 
 
 app = FastAPI(
     title="ForgeAI",
-    version="0.3.0",
-    description="Production-oriented GitHub pull request risk review platform.",
+    version="0.4.0",
+    description="Production-oriented GitHub pull request risk review platform and control plane.",
     lifespan=lifespan,
 )
 
@@ -43,21 +94,28 @@ def health() -> dict[str, str]:
 
 
 @app.get("/ready")
-def ready() -> dict[str, str]:
-    return {"status": "ready", "service": "forgeai"}
+async def ready() -> dict[str, str | bool]:
+    queue_ok = await queue_health(app.state.job_queue)
+    return {
+        "status": "ready" if queue_ok else "degraded",
+        "service": "forgeai",
+        "queue": queue_ok,
+    }
+
+
+@app.get("/metrics")
+def metrics() -> Response:
+    body, media_type = metrics_payload()
+    return Response(content=body, media_type=media_type)
+
+
+@app.get("/v1/tools")
+def list_tools() -> dict[str, object]:
+    return {"tools": app.state.tool_gateway.list_tools()}
 
 
 def _build_report(snapshot: PullRequestSnapshot) -> ReviewReport:
-    findings, factors = analyze(snapshot)
-    score = calculate_score(factors)
-    gate = gate_decision(score, settings, findings)
-    return ReviewReport(
-        snapshot=snapshot,
-        risk_score=score,
-        gate=gate,
-        findings=findings,
-        factors=factors,
-    )
+    return build_report(snapshot, settings)
 
 
 @app.post("/v1/reviews", response_model=ReviewReport)
@@ -90,5 +148,183 @@ def create_assisted_review(request: AssistedReviewRequest) -> AssistedReviewRepo
         plan = planner.plan(baseline, context)
     except (GitHubAPIError, ValueError) as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-
     return AssistedReviewReport(baseline=baseline, context=context, plan=plan)
+
+
+@app.post("/v1/jobs", response_model=ReviewJobResponse, status_code=202)
+async def create_job(request: ReviewJobRequest) -> ReviewJobResponse:
+    service: ReviewService = app.state.review_service
+    job_id = await service.create_job(request)
+    await app.state.job_queue.enqueue(job_id)
+    async with app.state.database.sessions() as session:
+        record = await ControlPlaneRepository().get_job(session, job_id)
+    return ControlPlaneRepository.to_response(record)
+
+
+@app.get("/v1/jobs", response_model=list[ReviewJobResponse])
+async def list_jobs() -> list[ReviewJobResponse]:
+    async with app.state.database.sessions() as session:
+        records = await ControlPlaneRepository().list_jobs(session)
+    return [ControlPlaneRepository.to_response(record) for record in records]
+
+
+@app.get("/v1/jobs/{job_id}", response_model=JobDetailResponse)
+async def get_job(job_id: str) -> JobDetailResponse:
+    async with app.state.database.sessions() as session:
+        record = await ControlPlaneRepository().get_job(session, job_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="review job not found")
+    return ControlPlaneRepository.to_detail(record)
+
+
+@app.post("/v1/jobs/{job_id}/evidence", response_model=JobDetailResponse)
+async def ingest_evidence(job_id: str, request: EvidenceBatchRequest) -> JobDetailResponse:
+    try:
+        await app.state.review_service.add_evidence_and_recompute_gate(job_id, request.findings)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return await get_job(job_id)
+
+
+@app.post("/v1/jobs/{job_id}/evidence/sarif", response_model=JobDetailResponse)
+async def ingest_sarif(job_id: str, source: str, payload: dict[str, object]) -> JobDetailResponse:
+    from forgeai.control_models import EvidenceSource
+    from forgeai.evidence_ingest import parse_sarif
+
+    try:
+        evidence_source = EvidenceSource(source)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400, detail="source must be codeql or dependency-review"
+        ) from exc
+    findings = parse_sarif(payload, evidence_source)
+    try:
+        await app.state.review_service.add_evidence_and_recompute_gate(job_id, findings)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return await get_job(job_id)
+
+
+async def _decide_approval(
+    job_id: str, state: ApprovalState, request: ApprovalDecisionRequest
+) -> JobDetailResponse:
+    async with app.state.database.sessions() as session:
+        try:
+            await ControlPlaneRepository().upsert_approval(
+                session, job_id, state, request.decided_by, request.rationale
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return await get_job(job_id)
+
+
+@app.post("/v1/jobs/{job_id}/approval/approve", response_model=JobDetailResponse)
+async def approve_job(job_id: str, request: ApprovalDecisionRequest) -> JobDetailResponse:
+    return await _decide_approval(job_id, ApprovalState.APPROVED, request)
+
+
+@app.post("/v1/jobs/{job_id}/approval/reject", response_model=JobDetailResponse)
+async def reject_job(job_id: str, request: ApprovalDecisionRequest) -> JobDetailResponse:
+    return await _decide_approval(job_id, ApprovalState.REJECTED, request)
+
+
+@app.post("/v1/jobs/{job_id}/execute", response_model=ExecutionResponse)
+async def execute_tool(job_id: str, request: ExecutionRequest) -> ExecutionResponse:
+    async with app.state.database.sessions() as session:
+        record = await ControlPlaneRepository().get_job(session, job_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="review job not found")
+    if record.status != "succeeded":
+        raise HTTPException(status_code=409, detail="review job must succeed before execution")
+    if not record.approval or record.approval.state != ApprovalState.APPROVED.value:
+        raise HTTPException(status_code=403, detail="explicit human approval is required")
+    arguments = {**request.arguments, "repository": record.repository}
+    try:
+        result = app.state.tool_gateway.call(request.tool_name, arguments, approved=True)
+    except ToolPolicyError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    async with app.state.database.sessions() as session:
+        execution_id = await ControlPlaneRepository().create_execution(
+            session, job_id, request.tool_name, arguments, "succeeded", result
+        )
+    return ExecutionResponse(
+        execution_id=execution_id,
+        job_id=job_id,
+        tool_name=request.tool_name,
+        status="succeeded",
+        response=result,
+    )
+
+
+@app.post("/mcp")
+async def mcp_gateway(message: dict[str, object]) -> JSONResponse:
+    method = message.get("method")
+    request_id = message.get("id")
+    if method == "tools/list":
+        return JSONResponse(
+            {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {"tools": app.state.tool_gateway.list_tools()},
+            }
+        )
+    if method != "tools/call":
+        return JSONResponse(
+            {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {"code": -32601, "message": "method not found"},
+            },
+            status_code=400,
+        )
+    params = message.get("params")
+    if not isinstance(params, dict) or not isinstance(params.get("name"), str):
+        return JSONResponse(
+            {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {"code": -32602, "message": "invalid tool call"},
+            },
+            status_code=400,
+        )
+    arguments = params.get("arguments")
+    if not isinstance(arguments, dict):
+        arguments = {}
+    job_id = arguments.get("job_id")
+    if not isinstance(job_id, str):
+        return JSONResponse(
+            {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {"code": -32602, "message": "job_id is required"},
+            },
+            status_code=400,
+        )
+    async with app.state.database.sessions() as session:
+        record = await ControlPlaneRepository().get_job(session, job_id)
+    if record is None or record.status != "succeeded":
+        return JSONResponse(
+            {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {"code": -32001, "message": "succeeded review job is required"},
+            },
+            status_code=409,
+        )
+    approved = bool(record.approval and record.approval.state == ApprovalState.APPROVED.value)
+    safe_args = {key: str(value) for key, value in arguments.items() if key != "job_id"}
+    safe_args["repository"] = record.repository
+    try:
+        result = app.state.tool_gateway.call(str(params["name"]), safe_args, approved=approved)
+    except (ToolPolicyError, ValueError) as exc:
+        return JSONResponse(
+            {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {"code": -32001, "message": str(exc)},
+            },
+            status_code=403,
+        )
+    return JSONResponse({"jsonrpc": "2.0", "id": request_id, "result": result})

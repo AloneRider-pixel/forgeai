@@ -69,6 +69,8 @@ class GitHubClient:
                 f"GitHub {endpoint} request failed with HTTP {response.status_code}: "
                 f"{response.text[:200]}"
             )
+        if response.status_code == 204:
+            return None
         try:
             return response.json()
         except ValueError as exc:
@@ -119,13 +121,11 @@ class GitHubClient:
     ) -> tuple[PullRequestSnapshot, list[ChangedFile]]:
         payload = self._get_pull_request_payload(repository, pull_request)
         changed_files = self.get_pull_request_files(repository, pull_request)
-
         head = payload.get("head")
         base = payload.get("base")
         head_sha = head.get("sha", "") if isinstance(head, dict) else ""
         head_ref = head.get("ref", "") if isinstance(head, dict) else ""
         base_ref = base.get("ref", "") if isinstance(base, dict) else ""
-
         snapshot = PullRequestSnapshot(
             repository=repository,
             pull_request=pull_request,
@@ -148,9 +148,7 @@ class GitHubClient:
 
     def get_file_content(self, repository: str, path: str, ref: str) -> str | None:
         response = self._request(
-            "GET",
-            f"/repos/{repository}/contents/{path}",
-            params={"ref": ref},
+            "GET", f"/repos/{repository}/contents/{path}", params={"ref": ref}
         )
         payload = self._raise_for_payload(response, "file-content")
         if not isinstance(payload, dict):
@@ -161,3 +159,11 @@ class GitHubClient:
             return base64.b64decode(payload["content"]).decode("utf-8", errors="replace")
         except (ValueError, UnicodeError) as exc:
             raise GitHubAPIError(f"GitHub returned undecodable content for {path}") from exc
+
+    def dispatch_workflow(self, repository: str, workflow_id: str, ref: str = "main") -> None:
+        response = self._request(
+            "POST",
+            f"/repos/{repository}/actions/workflows/{workflow_id}/dispatches",
+            json={"ref": ref},
+        )
+        self._raise_for_payload(response, "workflow-dispatch")

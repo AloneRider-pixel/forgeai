@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,6 +20,9 @@ class Settings(BaseSettings):
     llm_api_key: str | None = None
     llm_model: str = "gpt-4.1-mini"
     llm_timeout_seconds: float = 30.0
+    database_url: str = "sqlite+aiosqlite:///./forgeai.db"
+    redis_url: str | None = None
+    allowed_github_workflows: list[str] = Field(default_factory=lambda: ["ci.yml"])
 
 
 @lru_cache

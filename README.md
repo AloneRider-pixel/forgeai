@@ -4,118 +4,133 @@
 [![CodeQL](https://github.com/AloneRider-pixel/forgeai/actions/workflows/codeql.yml/badge.svg)](https://github.com/AloneRider-pixel/forgeai/actions/workflows/codeql.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**Production-oriented GitHub pull-request risk and review platform.**
+**Production-oriented GitHub pull-request risk, review, and governance platform.**
 
-ForgeAI combines a deterministic risk engine with bounded repository context and an optional LLM review planner. The core decision path remains usable without an external model, while model-assisted reasoning is constrained by typed inputs, context limits, secret redaction, and explicit fallback behavior.
+ForgeAI combines a deterministic risk engine with bounded repository context, optional LLM planning, and an asynchronous control plane for persisted review workflows and governed automation. The core decision path remains usable without an external model, while model-assisted reasoning is constrained by typed inputs, context limits, secret redaction, and explicit fallback behavior.
 
 > **Portfolio focus:** backend architecture + developer tooling + secure LLM integration + GitHub automation.
 
+> **Control-plane build:** PostgreSQL persistence, Redis jobs, evidence ingestion, approval-gated automation, MCP-style tooling, and OpenTelemetry/Prometheus observability.
+
 ## Why ForgeAI
 
-LLM-assisted code review can introduce a second class of risk: the review model itself must be prevented from turning untrusted repository content into instructions. ForgeAI treats repository files as data, keeps the deterministic baseline independent of the LLM, and makes the model an optional planning layer rather than a trusted decision-maker.
+LLM-assisted code review can introduce a second class of risk: repository content must never silently become executable instructions for the review system. ForgeAI treats repository files as data, keeps the deterministic baseline independent of the LLM, and makes model-assisted reasoning an optional planning layer rather than a trusted decision-maker.
+
+## Architecture
 
 ```text
 GitHub Pull Request
-        ↓
-Deterministic risk analysis
-  ├── path classification
-  ├── security rules
-  ├── test impact
-  ├── change size
-  └── risk score / merge gate
-        ↓
-Optional assisted review
-  ├── bounded context retrieval
-  ├── secret redaction
-  └── LLM review planner
-        ↓
-Structured review plan
+        |
+        v
+FastAPI Control Plane
+        |
+        +--> PostgreSQL ---- review history / evidence / approvals / execution audit
+        |
+        +--> Redis ---------- durable review-job queue
+        |
+        +--> Review Worker -- deterministic analysis -> bounded context -> planner
+        |                                      |
+        |                                      +--> deterministic
+        |                                      +--> OpenAI-compatible LLM
+        |
+        +--> Evidence API --- CodeQL / dependency-review SARIF
+        |
+        +--> Approval Gate -- explicit human approval
+        |
+        +--> Tool Gateway --- allowlisted GitHub Actions dispatch
+                   |
+                   +--> JSON-RPC /mcp gateway
+
+Observability: OpenTelemetry tracing + Prometheus metrics
 ```
 
-## Core capabilities
+## Capabilities
 
-### Deterministic risk engine
+### Deterministic review core
 
-- Security-sensitive path detection.
-- Credential and private-key detection.
-- Infrastructure/deployment change detection.
-- Database and migration change detection.
-- Dependency-manifest change detection.
-- Test-impact heuristics.
-- Large-change surface detection.
-- Explainable 0–100 risk score.
-- Fail-closed gate for critical findings.
-- Stable rule IDs such as `SEC001`, `OPS001`, and `TEST001`.
+- Security, credential, infrastructure, data, dependency, test-impact, and change-size rules.
+- Stable rule IDs and explainable 0–100 risk scoring.
+- Critical findings and threshold breaches produce a review-required gate.
+- No LLM is required for the baseline decision.
 
-### GitHub integration
+### Repository-aware assisted review
 
-- Pull-request metadata retrieval.
-- Changed-file pagination with bounded page counts.
-- Retry handling for rate limits and transient failures.
-- Head SHA and branch metadata.
-- Targeted file-content retrieval.
-- Validation of malformed upstream payloads.
+- Pull-request changed-file pagination.
+- Head-SHA file retrieval.
+- Bounded context selection and relevance ranking.
+- Private-key and secret-value redaction.
+- Repository content is treated as untrusted data and never executed.
+- OpenAI-compatible planner with structured JSON parsing and deterministic fallback.
 
-### Assisted review pipeline
+### Asynchronous control plane
 
-`POST /v1/reviews/assisted` starts from the deterministic baseline and adds a bounded set of relevant source files.
+`POST /v1/jobs` creates a persisted review job and enqueues it. The queue is Redis-backed when `REDIS_URL` is configured and falls back to an in-process queue for local development.
 
-Context controls include:
+The worker persists state transitions:
 
-- configurable file and character limits;
-- lexical relevance ranking;
-- secret/private-key redaction;
-- no execution of repository content;
-- an explicit prompt-injection boundary in the planner system instruction.
+`queued -> running -> succeeded | failed`
 
-### LLM planner
+Review reports, plans, evidence, approvals, and action executions remain queryable after the worker finishes.
 
-ForgeAI accepts an OpenAI-compatible `/chat/completions` endpoint through configuration. Structured output is validated, and the system falls back to the deterministic planner when the model is unavailable, times out, returns malformed output, or violates the expected schema.
+### CodeQL and dependency-review ingestion
 
-No model API key is required for the deterministic path, local development, or CI.
+`POST /v1/jobs/{job_id}/evidence/sarif?source=codeql` accepts SARIF-shaped analysis output. The same endpoint accepts `source=dependency-review`.
 
-## Evaluation harness
+High or critical external evidence can raise the effective gate to `review_required`, even when the deterministic baseline was below the configured threshold.
 
-The deterministic analyzer is evaluated against versioned fixture cases in `evals/cases.jsonl` when that fixture set is present.
+### Human approval and governed automation
 
-```bash
-python scripts/run_eval.py
-```
+ForgeAI exposes an explicit approval state machine:
 
-The evaluation script reports case count, exact-match cases, precision, and recall. Keep benchmark results tied to a versioned fixture set and document the evaluation methodology before publishing performance claims.
+`pending -> approved | rejected`
+
+Side-effecting tools cannot execute without an approved review job. The tool gateway allowlists workflow IDs through `ALLOWED_GITHUB_WORKFLOWS` and currently exposes `github.workflow_dispatch`.
+
+### MCP-style tool gateway
+
+`POST /mcp` supports JSON-RPC methods `tools/list` and `tools/call`. Tool calls are linked to a persisted review job and require an approved state before the GitHub Actions dispatch adapter is reached.
+
+### Observability
+
+- OpenTelemetry spans around review processing.
+- Prometheus counters for started/completed jobs.
+- Review-duration histogram.
+- `GET /metrics` for Prometheus scraping.
 
 ## API
 
-### `GET /health`
-Liveness endpoint.
+### Liveness and readiness
 
-### `GET /ready`
-Readiness endpoint.
-
-### `POST /v1/reviews`
-Runs the deterministic baseline reviewer.
-
-```json
-{
-  "repository": "octocat/Hello-World",
-  "pull_request": 42
-}
+```text
+GET /health
+GET /ready
+GET /metrics
 ```
 
-### `POST /v1/reviews/assisted`
-Runs deterministic analysis, bounded repository-context retrieval, and review planning.
+### Synchronous review endpoints
 
-```json
-{
-  "repository": "octocat/Hello-World",
-  "pull_request": 42,
-  "use_llm": false,
-  "max_context_files": 5,
-  "max_file_chars": 12000
-}
+```text
+POST /v1/reviews
+POST /v1/reviews/assisted
+```
+
+### Control-plane endpoints
+
+```text
+POST /v1/jobs
+GET  /v1/jobs
+GET  /v1/jobs/{job_id}
+POST /v1/jobs/{job_id}/evidence
+POST /v1/jobs/{job_id}/evidence/sarif?source=codeql
+POST /v1/jobs/{job_id}/approval/approve
+POST /v1/jobs/{job_id}/approval/reject
+POST /v1/jobs/{job_id}/execute
+GET  /v1/tools
+POST /mcp
 ```
 
 ### `GET /docs`
+
 Interactive OpenAPI documentation.
 
 ## Engineering controls
@@ -136,16 +151,25 @@ An external model enhances the review workflow but is not the sole dependency fo
 
 Changed-file retrieval is paginated with a maximum page count. Context retrieval is limited by both file count and characters per file.
 
+### Approval-gated side effects
+
+Review analysis, external evidence, human authorization, and tool execution are separate control-plane stages. An approved state is persisted before a side-effecting GitHub Actions dispatch can execute.
+
 ## Technology stack
 
 | Layer | Technology |
 |---|---|
-| Backend | Python 3.11, FastAPI |
+| Backend | Python 3.11+, FastAPI |
+| Persistence | SQLAlchemy async, SQLite local, PostgreSQL production |
+| Queue | asyncio local queue, Redis production |
 | GitHub | GitHub API integration |
 | Review engine | Deterministic rules + typed models |
 | LLM | OpenAI-compatible provider |
-| Quality | Pytest, Ruff |
+| Evidence | SARIF / CodeQL / dependency-review |
+| Quality | Pytest, Ruff, evaluation harness |
 | Security | Secret redaction, prompt-injection boundary, CodeQL |
+| Observability | OpenTelemetry + Prometheus |
+| Automation | GitHub Actions + approval gate + MCP-style tool gateway |
 | Infrastructure | Docker, Docker Compose, GitHub Actions |
 
 ## Repository structure
@@ -156,16 +180,29 @@ forgeai/
 │   ├── main.py
 │   ├── config.py
 │   ├── models.py
-│   └── services/
-│       ├── analyzer.py
-│       ├── context.py
-│       ├── evaluator.py
-│       ├── github_client.py
-│       ├── planner.py
-│       └── risk.py
+│   ├── control_models.py
+│   ├── db.py
+│   ├── db_models.py
+│   ├── repository.py
+│   ├── queue.py
+│   ├── evidence.py
+│   ├── evidence_ingest.py
+│   ├── observability.py
+│   ├── tool_gateway.py
+│   ├── services/
+│   │   ├── analyzer.py
+│   │   ├── context.py
+│   │   ├── evaluator.py
+│   │   ├── github_client.py
+│   │   ├── planner.py
+│   │   ├── review_engine.py
+│   │   ├── review_service.py
+│   │   └── risk.py
+│   └── worker.py
 ├── tests/
 ├── evals/cases.jsonl
 ├── scripts/run_eval.py
+├── docs/control-plane.md
 ├── .github/workflows/ci.yml
 ├── .github/workflows/codeql.yml
 ├── Dockerfile
@@ -175,7 +212,7 @@ forgeai/
 
 ## Local development
 
-Requirements: Python 3.11+ and Docker. A GitHub token is required for authenticated GitHub API access.
+Python 3.11+ is supported. Docker Compose provides the full control-plane stack.
 
 ```bash
 python -m venv .venv
@@ -185,9 +222,13 @@ cp .env.example .env
 uvicorn forgeai.main:app --reload
 ```
 
-Open `http://localhost:8000/docs`.
+For the full service topology:
 
-### Quality checks
+```bash
+docker compose up --build
+```
+
+Run quality checks:
 
 ```bash
 pytest
@@ -195,35 +236,46 @@ ruff check src tests scripts
 python scripts/run_eval.py
 ```
 
-### Docker
+Run a standalone Redis worker:
 
 ```bash
-docker compose up --build
+python -m forgeai.worker
 ```
 
 ## Configuration
 
 | Variable | Purpose | Default |
-|---|---|---|
+| --- | --- | --- |
 | `GITHUB_TOKEN` | GitHub API token | empty |
 | `RISK_GATE_THRESHOLD` | Baseline risk threshold | `60` |
 | `HTTP_TIMEOUT_SECONDS` | GitHub API timeout | `15` |
-| `CONTEXT_MAX_FILES` | Max files in assisted context | `5` |
-| `CONTEXT_MAX_CHARS` | Max characters per context file | `12000` |
+| `CONTEXT_MAX_FILES` | Context file bound | `5` |
+| `CONTEXT_MAX_CHARS` | Context character bound | `12000` |
 | `LLM_BASE_URL` | OpenAI-compatible API base URL | empty |
 | `LLM_API_KEY` | LLM API key | empty |
 | `LLM_MODEL` | Model name | `gpt-4.1-mini` |
 | `LLM_TIMEOUT_SECONDS` | LLM timeout | `30` |
+| `DATABASE_URL` | SQLAlchemy async database URL | `sqlite+aiosqlite:///./forgeai.db` |
+| `REDIS_URL` | Redis connection URL; empty enables local queue | empty |
+| `ALLOWED_GITHUB_WORKFLOWS` | JSON list of workflow IDs permitted for dispatch | `["ci.yml"]` |
 
-## Roadmap
+For production, use PostgreSQL through an async SQLAlchemy URL such as `postgresql+asyncpg://...` and run the worker as a separate service.
 
-- CodeQL and dependency-review ingestion.
+## Security model
+
+The control plane separates analysis from execution. Repository data is bounded and redacted before optional model use. External analysis is evidence rather than direct authority. Side-effecting automation is allowlisted and requires an explicit persisted approval state. Execution history is stored in PostgreSQL/SQLite so the control plane has an auditable record of what was requested.
+
+## Evaluation
+
+The deterministic analyzer uses versioned cases in `evals/cases.jsonl` and reports precision, recall, and exact-match coverage through `scripts/run_eval.py`. CI runs linting, tests, the evaluation benchmark, and a Docker build.
+
+## Next engineering layer
+
 - Repository-wide semantic retrieval with embeddings.
-- Persistent review history and Redis-backed asynchronous jobs.
-- GitHub Actions execution with explicit approval gates.
-- MCP tool gateway with allowlisted capabilities.
-- OpenTelemetry traces, metrics, latency, and model-cost telemetry.
-- Regression benchmarks with seeded repositories and adversarial prompt-injection fixtures.
+- Adversarial prompt-injection and tool-abuse benchmark suite.
+- OTLP exporter and trace correlation across API, worker, and tool execution.
+- Idempotency keys and durable dead-letter handling for review jobs.
+- GitHub App/webhook ingestion for fully event-driven review workflows.
 
 ## License
 
