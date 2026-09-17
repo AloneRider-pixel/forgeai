@@ -5,6 +5,7 @@ from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -16,7 +17,7 @@ from forgeai.control_models import (
     JobStatus,
     ReviewJobResponse,
 )
-from forgeai.db_models import ApprovalRecord, EvidenceRecord, ReviewJobRecord
+from forgeai.db_models import ApprovalRecord, EvidenceRecord, ReviewJobRecord, WebhookDeliveryRecord
 
 
 class ControlPlaneRepository:
@@ -27,6 +28,8 @@ class ControlPlaneRepository:
         repository: str,
         pull_request: int,
         request: dict[str, Any],
+        *,
+        commit: bool = True,
     ) -> ReviewJobRecord:
         now = datetime.now(UTC)
         record = ReviewJobRecord(
@@ -39,7 +42,8 @@ class ControlPlaneRepository:
             updated_at=now,
         )
         session.add(record)
-        await session.commit()
+        if commit:
+            await session.commit()
         return record
 
     async def get_job(self, session: AsyncSession, job_id: str) -> ReviewJobRecord | None:
@@ -151,6 +155,143 @@ class ControlPlaneRepository:
         )
         await session.commit()
         return execution_id
+
+    async def get_webhook_delivery(
+        self, session: AsyncSession, delivery_id: str
+    ) -> WebhookDeliveryRecord | None:
+        result = await session.execute(
+            select(WebhookDeliveryRecord)
+            .options(selectinload(WebhookDeliveryRecord.job))
+            .where(WebhookDeliveryRecord.delivery_id == delivery_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def create_webhook_delivery(
+        self,
+        session: AsyncSession,
+        delivery_id: str,
+        event_type: str,
+        action: str,
+        repository: str,
+        pull_request: int | None,
+        payload: dict[str, Any],
+        status: str,
+        job_id: str | None = None,
+        *,
+        commit: bool = True,
+    ) -> WebhookDeliveryRecord:
+        now = datetime.now(UTC)
+        record = WebhookDeliveryRecord(
+            delivery_id=delivery_id,
+            event_type=event_type,
+            action=action,
+            repository=repository,
+            pull_request=pull_request,
+            payload_json=payload,
+            status=status,
+            job_id=job_id,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(record)
+        if commit:
+            await session.commit()
+        return record
+
+    async def create_webhook_delivery_idempotent(
+        self,
+        session: AsyncSession,
+        delivery_id: str,
+        event_type: str,
+        action: str,
+        repository: str,
+        pull_request: int | None,
+        payload: dict[str, Any],
+        status: str,
+        job_id: str | None = None,
+    ) -> tuple[WebhookDeliveryRecord, bool]:
+        existing = await self.get_webhook_delivery(session, delivery_id)
+        if existing is not None:
+            return existing, False
+        try:
+            record = await self.create_webhook_delivery(
+                session,
+                delivery_id,
+                event_type,
+                action,
+                repository,
+                pull_request,
+                payload,
+                status,
+                job_id,
+            )
+            return record, True
+        except IntegrityError:
+            await session.rollback()
+            existing = await self.get_webhook_delivery(session, delivery_id)
+            if existing is None:
+                raise
+            return existing, False
+
+    async def list_pending_webhook_deliveries(
+        self, session: AsyncSession, limit: int = 20
+    ) -> list[WebhookDeliveryRecord]:
+        result = await session.execute(
+            select(WebhookDeliveryRecord)
+            .where(WebhookDeliveryRecord.status == "pending")
+            .order_by(WebhookDeliveryRecord.created_at.asc())
+            .limit(limit)
+        )
+        return list(result.scalars())
+
+    async def mark_webhook_enqueued(self, session: AsyncSession, delivery_id: str) -> None:
+        record = await self._require_webhook_delivery(session, delivery_id)
+        record.status = "enqueued"
+        record.attempts += 1
+        record.updated_at = datetime.now(UTC)
+        record.last_error = None
+        await session.commit()
+
+    async def mark_webhook_dispatch_failure(
+        self, session: AsyncSession, delivery_id: str, error: str, max_attempts: int
+    ) -> None:
+        record = await self._require_webhook_delivery(session, delivery_id)
+        record.attempts += 1
+        record.last_error = error[:4000]
+        record.updated_at = datetime.now(UTC)
+        if record.attempts >= max_attempts:
+            record.status = "dead_lettered"
+            if record.job_id:
+                job = await self._require_job(session, record.job_id)
+                job.status = JobStatus.FAILED.value
+                job.error = f"webhook dispatch exhausted retries: {error}"[:4000]
+                job.updated_at = datetime.now(UTC)
+        await session.commit()
+
+    async def mark_webhook_completed(self, session: AsyncSession, delivery_id: str) -> None:
+        record = await self._require_webhook_delivery(session, delivery_id)
+        record.status = "completed"
+        record.updated_at = datetime.now(UTC)
+        record.completed_at = datetime.now(UTC)
+        record.last_error = None
+        await session.commit()
+
+    async def mark_webhook_failed(
+        self, session: AsyncSession, delivery_id: str, error: str
+    ) -> None:
+        record = await self._require_webhook_delivery(session, delivery_id)
+        record.status = "failed"
+        record.last_error = error[:4000]
+        record.updated_at = datetime.now(UTC)
+        await session.commit()
+
+    async def _require_webhook_delivery(
+        self, session: AsyncSession, delivery_id: str
+    ) -> WebhookDeliveryRecord:
+        record = await session.get(WebhookDeliveryRecord, delivery_id)
+        if record is None:
+            raise ValueError(f"webhook delivery {delivery_id} was not found")
+        return record
 
     async def _require_job(self, session: AsyncSession, job_id: str) -> ReviewJobRecord:
         record = await session.get(ReviewJobRecord, job_id)

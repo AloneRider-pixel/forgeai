@@ -75,12 +75,18 @@ class ReviewService:
                     baseline.model_dump(mode="json"),
                     plan.model_dump(mode="json"),
                 )
+                if request.delivery_id:
+                    await self.repository.mark_webhook_completed(session, request.delivery_id)
                 record = await self.repository.get_job(session, job_id)
                 if record and record.gate == "review_required":
                     await self.repository.upsert_approval(session, job_id, ApprovalState.PENDING)
         except Exception as exc:
             async with self.database.sessions() as session:
                 await self.repository.set_failed(session, job_id, str(exc))
+                if request.delivery_id:
+                    await self.repository.mark_webhook_failed(
+                        session, request.delivery_id, str(exc)
+                    )
             raise
 
     async def add_evidence_and_recompute_gate(

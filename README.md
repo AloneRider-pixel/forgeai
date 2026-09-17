@@ -10,7 +10,7 @@ ForgeAI combines a deterministic risk engine with bounded repository context, op
 
 > **Portfolio focus:** backend architecture + developer tooling + secure LLM integration + GitHub automation.
 
-> **Control-plane build:** PostgreSQL persistence, Redis jobs, evidence ingestion, approval-gated automation, MCP-style tooling, and OpenTelemetry/Prometheus observability.
+> **Control-plane build:** PostgreSQL persistence, Redis jobs, signed GitHub webhook ingestion, idempotent delivery tracking, durable dispatch retries, evidence gating, approval-gated automation, MCP-style tooling, and OpenTelemetry/Prometheus observability.
 
 ## Why ForgeAI
 
@@ -21,10 +21,13 @@ LLM-assisted code review can introduce a second class of risk: repository conten
 ```text
 GitHub Pull Request
         |
+        | webhook (HMAC SHA-256)
         v
-FastAPI Control Plane
+FastAPI Ingestion
         |
-        +--> PostgreSQL ---- review history / evidence / approvals / execution audit
+        +--> PostgreSQL ---- webhook inbox + review history + evidence + approvals
+        |
+        +--> Dispatcher ---- pending delivery -> review-job queue
         |
         +--> Redis ---------- durable review-job queue
         |
@@ -62,6 +65,34 @@ Observability: OpenTelemetry tracing + Prometheus metrics
 - Repository content is treated as untrusted data and never executed.
 - OpenAI-compatible planner with structured JSON parsing and deterministic fallback.
 
+### Event-driven GitHub ingestion
+
+`POST /v1/webhooks/github` verifies the GitHub delivery signature, accepts supported pull-request events, and stores the delivery before queueing review work.
+
+Supported actions:
+
+```text
+opened
+reopened
+synchronize
+ready_for_review
+```
+
+`X-GitHub-Delivery` is persisted as the idempotency key, so webhook retries return the existing job instead of creating duplicate review work. Unsupported event types/actions are recorded as `ignored`.
+
+### Durable delivery and dead-letter handling
+
+Webhook delivery state is persisted independently from queue state:
+
+```text
+pending -> enqueued -> completed
+             |
+             +----> failed
+pending -> dead_lettered   (dispatch retries exhausted)
+```
+
+Dispatch failures increment an attempt counter. After `WEBHOOK_DISPATCH_MAX_ATTEMPTS`, the linked job is marked failed and the delivery becomes inspectable as a durable dead-letter record.
+
 ### Asynchronous control plane
 
 `POST /v1/jobs` creates a persisted review job and enqueues it. The queue is Redis-backed when `REDIS_URL` is configured and falls back to an in-process queue for local development.
@@ -70,7 +101,7 @@ The worker persists state transitions:
 
 `queued -> running -> succeeded | failed`
 
-Review reports, plans, evidence, approvals, and action executions remain queryable after the worker finishes.
+Review reports, plans, evidence, approvals, action executions, and webhook delivery metadata remain queryable after the worker finishes.
 
 ### CodeQL and dependency-review ingestion
 
@@ -126,6 +157,8 @@ POST /v1/jobs/{job_id}/approval/approve
 POST /v1/jobs/{job_id}/approval/reject
 POST /v1/jobs/{job_id}/execute
 GET  /v1/tools
+POST /v1/webhooks/github
+GET  /v1/webhooks/github/{delivery_id}
 POST /mcp
 ```
 
@@ -137,7 +170,15 @@ Interactive OpenAPI documentation.
 
 ### Separation of concerns
 
-The risk engine consumes a typed pull-request snapshot. GitHub HTTP behavior is isolated behind an adapter, while review planning is isolated behind a planner interface.
+The risk engine consumes a typed pull-request snapshot. GitHub HTTP behavior is isolated behind an adapter, review planning is isolated behind a planner interface, and webhook normalization is isolated from persistence and queue dispatch.
+
+### Signed webhook boundary
+
+Webhook requests are verified against the raw request body using HMAC SHA-256 before parsing. Payload size is bounded and unsupported events are not converted into review jobs.
+
+### Idempotent event ingestion
+
+Every GitHub delivery ID is persisted once. Retries return the existing delivery/job relationship, while the durable pending state allows dispatch to resume after a process restart.
 
 ### Untrusted repository content
 
@@ -162,12 +203,12 @@ Review analysis, external evidence, human authorization, and tool execution are 
 | Backend | Python 3.11+, FastAPI |
 | Persistence | SQLAlchemy async, SQLite local, PostgreSQL production |
 | Queue | asyncio local queue, Redis production |
-| GitHub | GitHub API integration |
+| GitHub | GitHub API + signed webhook ingestion |
 | Review engine | Deterministic rules + typed models |
 | LLM | OpenAI-compatible provider |
 | Evidence | SARIF / CodeQL / dependency-review |
 | Quality | Pytest, Ruff, evaluation harness |
-| Security | Secret redaction, prompt-injection boundary, CodeQL |
+| Security | HMAC webhook verification, secret redaction, prompt-injection boundary, CodeQL |
 | Observability | OpenTelemetry + Prometheus |
 | Automation | GitHub Actions + approval gate + MCP-style tool gateway |
 | Infrastructure | Docker, Docker Compose, GitHub Actions |
@@ -189,6 +230,7 @@ forgeai/
 │   ├── evidence_ingest.py
 │   ├── observability.py
 │   ├── tool_gateway.py
+│   ├── webhook.py
 │   ├── services/
 │   │   ├── analyzer.py
 │   │   ├── context.py
@@ -247,6 +289,7 @@ python -m forgeai.worker
 | Variable | Purpose | Default |
 | --- | --- | --- |
 | `GITHUB_TOKEN` | GitHub API token | empty |
+| `GITHUB_WEBHOOK_SECRET` | HMAC secret for GitHub webhook verification | empty |
 | `RISK_GATE_THRESHOLD` | Baseline risk threshold | `60` |
 | `HTTP_TIMEOUT_SECONDS` | GitHub API timeout | `15` |
 | `CONTEXT_MAX_FILES` | Context file bound | `5` |
@@ -258,12 +301,14 @@ python -m forgeai.worker
 | `DATABASE_URL` | SQLAlchemy async database URL | `sqlite+aiosqlite:///./forgeai.db` |
 | `REDIS_URL` | Redis connection URL; empty enables local queue | empty |
 | `ALLOWED_GITHUB_WORKFLOWS` | JSON list of workflow IDs permitted for dispatch | `["ci.yml"]` |
+| `WEBHOOK_DISPATCH_INTERVAL_SECONDS` | Pending delivery poll interval | `2` |
+| `WEBHOOK_DISPATCH_MAX_ATTEMPTS` | Maximum queue-dispatch attempts | `5` |
 
 For production, use PostgreSQL through an async SQLAlchemy URL such as `postgresql+asyncpg://...` and run the worker as a separate service.
 
 ## Security model
 
-The control plane separates analysis from execution. Repository data is bounded and redacted before optional model use. External analysis is evidence rather than direct authority. Side-effecting automation is allowlisted and requires an explicit persisted approval state. Execution history is stored in PostgreSQL/SQLite so the control plane has an auditable record of what was requested.
+The control plane separates ingestion, analysis, evidence, authorization, and execution. Webhook authenticity is checked before event parsing. Repository data is bounded and redacted before optional model use. External analysis is evidence rather than direct authority. Side-effecting automation is allowlisted and requires an explicit persisted approval state. Execution history and webhook delivery state are stored so the control plane has an auditable record of what was requested and how it progressed.
 
 ## Evaluation
 
@@ -273,9 +318,9 @@ The deterministic analyzer uses versioned cases in `evals/cases.jsonl` and repor
 
 - Repository-wide semantic retrieval with embeddings.
 - Adversarial prompt-injection and tool-abuse benchmark suite.
-- OTLP exporter and trace correlation across API, worker, and tool execution.
-- Idempotency keys and durable dead-letter handling for review jobs.
-- GitHub App/webhook ingestion for fully event-driven review workflows.
+- OTLP exporter and trace correlation across API, webhook dispatcher, worker, and tool execution.
+- Authenticated operator RBAC for approvals and execution.
+- Production database migrations and operational dashboards.
 
 ## License
 
