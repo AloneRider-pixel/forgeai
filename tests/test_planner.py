@@ -1,7 +1,7 @@
-from forgeai.models import ContextSnippet, PullRequestSnapshot, ReviewReport
-from forgeai.services.planner import DeterministicPlanner, OpenAICompatiblePlanner
 from forgeai.config import Settings
+from forgeai.models import ContextSnippet, PullRequestSnapshot, ReviewReport
 from forgeai.services.analyzer import analyze
+from forgeai.services.planner import DeterministicPlanner, OpenAICompatiblePlanner
 from forgeai.services.risk import calculate_score, gate_decision
 
 
@@ -17,10 +17,11 @@ def _report() -> ReviewReport:
         changed_files=1,
     )
     findings, factors = analyze(snapshot)
+    score = calculate_score(factors)
     return ReviewReport(
         snapshot=snapshot,
-        risk_score=calculate_score(factors),
-        gate=gate_decision(calculate_score(factors), Settings(), findings),
+        risk_score=score,
+        gate=gate_decision(score, Settings(), findings),
         findings=findings,
         factors=factors,
     )
