@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "0001_initial"
 down_revision = None
@@ -92,10 +92,18 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("delivery_id"),
         sa.UniqueConstraint("delivery_id", name="uq_webhook_delivery_id"),
     )
-    op.create_index("ix_webhook_deliveries_event_type", "webhook_deliveries", ["event_type"])
-    op.create_index("ix_webhook_deliveries_repository", "webhook_deliveries", ["repository"])
-    op.create_index("ix_webhook_deliveries_status", "webhook_deliveries", ["status"])
-    op.create_index("ix_webhook_deliveries_job_id", "webhook_deliveries", ["job_id"])
+    op.create_index(
+        "ix_webhook_deliveries_event_type", "webhook_deliveries", ["event_type"]
+    )
+    op.create_index(
+        "ix_webhook_deliveries_repository", "webhook_deliveries", ["repository"]
+    )
+    op.create_index(
+        "ix_webhook_deliveries_status", "webhook_deliveries", ["status"]
+    )
+    op.create_index(
+        "ix_webhook_deliveries_job_id", "webhook_deliveries", ["job_id"]
+    )
 
     op.create_table(
         "repository_documents",
@@ -110,7 +118,9 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("repository", "ref", "path", name="uq_repository_document"),
     )
-    op.create_index("ix_repository_documents_repository", "repository_documents", ["repository"])
+    op.create_index(
+        "ix_repository_documents_repository", "repository_documents", ["repository"]
+    )
     op.create_index("ix_repository_documents_ref", "repository_documents", ["ref"])
 
 
