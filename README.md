@@ -1,106 +1,98 @@
 # ForgeAI
 
-ForgeAI is a production-oriented GitHub pull-request review platform. It combines a deterministic risk engine with bounded repository context and an optional LLM review planner.
+[![CI](https://github.com/AloneRider-pixel/forgeai/actions/workflows/ci.yml/badge.svg)](https://github.com/AloneRider-pixel/forgeai/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/AloneRider-pixel/forgeai/actions/workflows/codeql.yml/badge.svg)](https://github.com/AloneRider-pixel/forgeai/actions/workflows/codeql.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-The architecture is intentionally layered: the core review decision does not depend on an LLM, while model-assisted reasoning is constrained by typed inputs, bounded context, secret redaction, and explicit fallback behavior.
+**Production-oriented GitHub pull-request risk and review platform.**
 
-## Architecture
+ForgeAI combines a deterministic risk engine with bounded repository context and an optional LLM review planner. The core decision path remains usable without an external model, while model-assisted reasoning is constrained by typed inputs, context limits, secret redaction, and explicit fallback behavior.
+
+> **Portfolio focus:** backend architecture + developer tooling + secure LLM integration + GitHub automation.
+
+## Why ForgeAI
+
+LLM-assisted code review can introduce a second class of risk: the review model itself must be prevented from turning untrusted repository content into instructions. ForgeAI treats repository files as data, keeps the deterministic baseline independent of the LLM, and makes the model an optional planning layer rather than a trusted decision-maker.
 
 ```text
-                         GitHub Pull Request
-                                  |
-                                  v
-                         +------------------+
-                         |   FastAPI API    |
-                         +--------+---------+
-                                  |
-                     +------------+------------+
-                     |                         |
-                     v                         v
-              Deterministic Core        Assisted Pipeline
-              ------------------        -----------------
-              path classification      PR + changed files
-              security rules            repository content
-              test impact               secret redaction
-              change size               bounded retrieval
-              risk scoring                      |
-              merge gate                       v
-                     |                  Review Planner
-                     |                  /           \
-                     |           deterministic     LLM
-                     |                 \             /
-                     +------------------+----------+
-                                        |
-                                        v
-                              Structured Review Plan
+GitHub Pull Request
+        ↓
+Deterministic risk analysis
+  ├── path classification
+  ├── security rules
+  ├── test impact
+  ├── change size
+  └── risk score / merge gate
+        ↓
+Optional assisted review
+  ├── bounded context retrieval
+  ├── secret redaction
+  └── LLM review planner
+        ↓
+Structured review plan
 ```
 
-## Current capabilities
+## Core capabilities
 
-### Deterministic risk analysis
+### Deterministic risk engine
 
 - Security-sensitive path detection.
-- Credential and private-key file detection.
-- Infrastructure and deployment change detection.
+- Credential and private-key detection.
+- Infrastructure/deployment change detection.
 - Database and migration change detection.
 - Dependency-manifest change detection.
 - Test-impact heuristics.
 - Large-change surface detection.
-- Explainable 0-100 risk score.
+- Explainable 0–100 risk score.
 - Fail-closed gate for critical findings.
-- Stable rule IDs such as `SEC001`, `SEC002`, `OPS001`, and `TEST001`.
+- Stable rule IDs such as `SEC001`, `OPS001`, and `TEST001`.
 
 ### GitHub integration
 
 - Pull-request metadata retrieval.
-- Changed-file pagination with bounded page count.
-- Retry handling for rate limits and transient upstream failures.
-- Pull-request head SHA and branch metadata.
-- File-content retrieval for targeted repository context.
-- Explicit validation for malformed upstream payloads.
+- Changed-file pagination with bounded page counts.
+- Retry handling for rate limits and transient failures.
+- Head SHA and branch metadata.
+- Targeted file-content retrieval.
+- Validation of malformed upstream payloads.
 
 ### Assisted review pipeline
 
-`POST /v1/reviews/assisted` builds a review bundle from the same deterministic baseline and then retrieves a bounded set of relevant source files.
+`POST /v1/reviews/assisted` starts from the deterministic baseline and adds a bounded set of relevant source files.
 
-Context handling includes:
+Context controls include:
 
 - configurable file and character limits;
-- lexical relevance ranking over changed files;
-- secret-value and private-key redaction;
+- lexical relevance ranking;
+- secret/private-key redaction;
 - no execution of repository content;
-- explicit prompt-injection boundary in the LLM system instruction.
+- an explicit prompt-injection boundary in the planner system instruction.
 
 ### LLM planner
 
-ForgeAI supports an OpenAI-compatible `/chat/completions` endpoint through configuration. The planner expects structured JSON and falls back to the deterministic planner on missing configuration, transport failure, malformed output, or invalid fields.
+ForgeAI accepts an OpenAI-compatible `/chat/completions` endpoint through configuration. Structured output is validated, and the system falls back to the deterministic planner when the model is unavailable, times out, returns malformed output, or violates the expected schema.
 
-No model API key is required to run ForgeAI locally or in CI.
+No model API key is required for the deterministic path, local development, or CI.
 
-### Evaluation harness
+## Evaluation harness
 
-The deterministic analyzer is evaluated against versioned fixture cases in `evals/cases.jsonl`.
-
-Run:
+The deterministic analyzer is evaluated against versioned fixture cases in `evals/cases.jsonl` when that fixture set is present.
 
 ```bash
 python scripts/run_eval.py
 ```
 
-The harness reports case count, exact-match cases, precision, and recall.
+The evaluation script reports case count, exact-match cases, precision, and recall. Keep benchmark results tied to a versioned fixture set and document the evaluation methodology before publishing performance claims.
 
 ## API
 
 ### `GET /health`
-
 Liveness endpoint.
 
 ### `GET /ready`
-
 Readiness endpoint.
 
 ### `POST /v1/reviews`
-
 Runs the deterministic baseline reviewer.
 
 ```json
@@ -111,7 +103,6 @@ Runs the deterministic baseline reviewer.
 ```
 
 ### `POST /v1/reviews/assisted`
-
 Runs deterministic analysis, bounded repository-context retrieval, and review planning.
 
 ```json
@@ -125,70 +116,39 @@ Runs deterministic analysis, bounded repository-context retrieval, and review pl
 ```
 
 ### `GET /docs`
-
 Interactive OpenAPI documentation.
 
 ## Engineering controls
 
 ### Separation of concerns
 
-The risk engine only consumes a typed pull-request snapshot. GitHub HTTP behavior is isolated behind an adapter, and planning is isolated behind a planner interface.
+The risk engine consumes a typed pull-request snapshot. GitHub HTTP behavior is isolated behind an adapter, while review planning is isolated behind a planner interface.
 
 ### Untrusted repository content
 
-Repository files are treated as data, not instructions. Context is bounded before it reaches a planner, common secret values are redacted, and LLM-assisted planning is optional.
+Repository files are handled as data, not instructions. Context is bounded before planning, common secret values are redacted, and model-assisted planning is optional.
 
 ### Deterministic fallback
 
-An external model is an enhancement rather than a dependency for the review decision. A planner failure never removes the deterministic baseline report.
+An external model enhances the review workflow but is not the sole dependency for the baseline review decision.
 
 ### Bounded upstream access
 
 Changed-file retrieval is paginated with a maximum page count. Context retrieval is limited by both file count and characters per file.
 
-## Local development
+## Technology stack
 
-Requirements: Python 3.11+, Docker, and a GitHub token for authenticated or private-repository access.
+| Layer | Technology |
+|---|---|
+| Backend | Python 3.11, FastAPI |
+| GitHub | GitHub API integration |
+| Review engine | Deterministic rules + typed models |
+| LLM | OpenAI-compatible provider |
+| Quality | Pytest, Ruff |
+| Security | Secret redaction, prompt-injection boundary, CodeQL |
+| Infrastructure | Docker, Docker Compose, GitHub Actions |
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-cp .env.example .env
-uvicorn forgeai.main:app --reload
-```
-
-Open `http://localhost:8000/docs`.
-
-Run tests and lint:
-
-```bash
-pytest
-ruff check src tests scripts
-python scripts/run_eval.py
-```
-
-Run with Docker:
-
-```bash
-docker compose up --build
-```
-
-## Configuration
-
-| Variable | Purpose | Default |
-| --- | --- | --- |
-| `GITHUB_TOKEN` | GitHub API token | empty |
-| `RISK_GATE_THRESHOLD` | Maximum baseline risk score before review | `60` |
-| `HTTP_TIMEOUT_SECONDS` | GitHub API timeout | `15` |
-| `CONTEXT_MAX_FILES` | Maximum files added to assisted context | `5` |
-| `CONTEXT_MAX_CHARS` | Maximum characters per context file | `12000` |
-| `LLM_BASE_URL` | OpenAI-compatible API base URL | empty |
-| `LLM_API_KEY` | LLM API key | empty |
-| `LLM_MODEL` | Model name passed to the provider | `gpt-4.1-mini` |
-| `LLM_TIMEOUT_SECONDS` | LLM request timeout | `30` |
-
-## Project structure
+## Repository structure
 
 ```text
 forgeai/
@@ -204,13 +164,6 @@ forgeai/
 │       ├── planner.py
 │       └── risk.py
 ├── tests/
-│   ├── test_analyzer.py
-│   ├── test_api.py
-│   ├── test_api_assisted.py
-│   ├── test_context.py
-│   ├── test_evaluator.py
-│   ├── test_github_client.py
-│   └── test_planner.py
 ├── evals/cases.jsonl
 ├── scripts/run_eval.py
 ├── .github/workflows/ci.yml
@@ -220,15 +173,57 @@ forgeai/
 └── pyproject.toml
 ```
 
+## Local development
+
+Requirements: Python 3.11+ and Docker. A GitHub token is required for authenticated GitHub API access.
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+cp .env.example .env
+uvicorn forgeai.main:app --reload
+```
+
+Open `http://localhost:8000/docs`.
+
+### Quality checks
+
+```bash
+pytest
+ruff check src tests scripts
+python scripts/run_eval.py
+```
+
+### Docker
+
+```bash
+docker compose up --build
+```
+
+## Configuration
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `GITHUB_TOKEN` | GitHub API token | empty |
+| `RISK_GATE_THRESHOLD` | Baseline risk threshold | `60` |
+| `HTTP_TIMEOUT_SECONDS` | GitHub API timeout | `15` |
+| `CONTEXT_MAX_FILES` | Max files in assisted context | `5` |
+| `CONTEXT_MAX_CHARS` | Max characters per context file | `12000` |
+| `LLM_BASE_URL` | OpenAI-compatible API base URL | empty |
+| `LLM_API_KEY` | LLM API key | empty |
+| `LLM_MODEL` | Model name | `gpt-4.1-mini` |
+| `LLM_TIMEOUT_SECONDS` | LLM timeout | `30` |
+
 ## Roadmap
 
-1. CodeQL and dependency-review ingestion.
-2. Repository-wide semantic retrieval with embeddings.
-3. Persistent review history and Redis-backed asynchronous jobs.
-4. GitHub Actions execution with explicit approval gates.
-5. MCP tool gateway with allowlisted capabilities.
-6. OpenTelemetry traces, metrics, latency, and model-cost telemetry.
-7. Regression benchmarks across seeded repositories and adversarial prompt-injection fixtures.
+- CodeQL and dependency-review ingestion.
+- Repository-wide semantic retrieval with embeddings.
+- Persistent review history and Redis-backed asynchronous jobs.
+- GitHub Actions execution with explicit approval gates.
+- MCP tool gateway with allowlisted capabilities.
+- OpenTelemetry traces, metrics, latency, and model-cost telemetry.
+- Regression benchmarks with seeded repositories and adversarial prompt-injection fixtures.
 
 ## License
 
