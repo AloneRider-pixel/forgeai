@@ -4,6 +4,7 @@ import hashlib
 import hmac
 
 import pytest
+from fastapi import HTTPException
 
 from forgeai.auth import ROLE_OPERATOR, ROLE_READER, ROLE_REVIEWER, authenticate
 from forgeai.config import Settings
@@ -22,7 +23,7 @@ def test_api_key_auth_matches_hashed_token() -> None:
 
 def test_invalid_api_key_is_rejected() -> None:
     settings = Settings(auth_required=True, api_key_roles={"0" * 64: [ROLE_REVIEWER]})
-    with pytest.raises(Exception):
+    with pytest.raises(HTTPException):
         authenticate("Bearer invalid", settings)
 
 
