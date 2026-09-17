@@ -1,5 +1,5 @@
-from collections.abc import Iterable
 import re
+from collections.abc import Iterable
 
 from forgeai.models import Finding, PullRequestSnapshot, RiskFactor, Severity
 
@@ -86,7 +86,9 @@ def analyze(snapshot: PullRequestSnapshot) -> tuple[list[Finding], list[RiskFact
             detail="The pull request touches credential-bearing or private-key file patterns.",
             paths=secret_paths,
             points=45,
-            rationale="Credential and private-key material can create immediate security exposure.",
+            rationale=(
+                "Credential and private-key material can create immediate security exposure."
+            ),
         )
 
     infra_paths = _matching(paths, INFRA_PATHS)
@@ -128,10 +130,14 @@ def analyze(snapshot: PullRequestSnapshot) -> tuple[list[Finding], list[RiskFact
             severity=Severity.MEDIUM,
             category="dependencies",
             title="Dependency manifests or lockfiles changed",
-            detail="Dependency inputs changed; compatibility and supply-chain impact should be checked.",
+            detail=(
+                "Dependency inputs changed; compatibility and supply-chain impact should be checked."
+            ),
             paths=dependency_paths,
             points=10,
-            rationale="Dependency changes can alter runtime behavior or introduce supply-chain risk.",
+            rationale=(
+                "Dependency changes can alter runtime behavior or introduce supply-chain risk."
+            ),
         )
 
     source_paths = [path for path in paths if path.lower().endswith(SOURCE_EXTENSIONS)]
