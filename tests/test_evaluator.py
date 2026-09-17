@@ -32,6 +32,6 @@ def test_evaluator_reports_per_rule_metrics() -> None:
     )
 
     assert metrics.cases == 2
-    assert metrics.exact_match_cases == 1
+    assert metrics.exact_match_cases == 2
     assert metrics.precision == 1.0
     assert metrics.recall == 1.0
