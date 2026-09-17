@@ -28,7 +28,7 @@ def test_assisted_review_returns_context_and_plan() -> None:
         return_value=(snapshot, changed_files),
     ), patch(
         "forgeai.main.GitHubClient.get_file_content",
-        return_value='def authenticate(token):\n    return token == "secret"\n',
+        return_value='def authenticate(token):\n    return token == "super-secret-value"\n',
     ):
         with TestClient(app) as client:
             response = client.post(
@@ -46,4 +46,5 @@ def test_assisted_review_returns_context_and_plan() -> None:
     assert payload["baseline"]["snapshot"]["pull_request"] == 42
     assert payload["plan"]["provider"] == "deterministic"
     assert len(payload["context"]) == 1
-    assert "secret" not in payload["context"][0]["content"]
+    assert "super-secret-value" not in payload["context"][0]["content"]
+    assert payload["context"][0]["redacted"] is True
