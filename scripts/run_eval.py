@@ -7,9 +7,6 @@ from forgeai.models import PullRequestSnapshot
 from forgeai.services.evaluator import EvaluationCase, evaluate
 
 
-ROOT = Path(__file__).resolve().parents[1]
-
-
 def load_cases(path: Path) -> list[EvaluationCase]:
     cases: list[EvaluationCase] = []
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -27,7 +24,8 @@ def load_cases(path: Path) -> list[EvaluationCase]:
 
 
 def main() -> None:
-    metrics = evaluate(load_cases(ROOT / "evals" / "cases.jsonl"))
+    root = Path(__file__).resolve().parents[1]
+    metrics = evaluate(load_cases(root / "evals" / "cases.jsonl"))
     print(f"cases={metrics.cases}")
     print(f"exact_match_cases={metrics.exact_match_cases}")
     print(f"precision={metrics.precision:.3f}")
