@@ -22,7 +22,7 @@ dependencies = [
   "opentelemetry-sdk>=1.36,<2",
 ]
 
-a [project.optional-dependencies]
+[project.optional-dependencies]
 dev = [
   "pytest>=8.4,<9",
   "pytest-cov>=6,<7",
