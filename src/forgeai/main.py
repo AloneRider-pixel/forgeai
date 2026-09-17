@@ -8,7 +8,6 @@ from forgeai.services.analyzer import analyze
 from forgeai.services.github_client import GitHubAPIError, GitHubClient
 from forgeai.services.risk import calculate_score, gate_decision
 
-
 settings = get_settings()
 
 
