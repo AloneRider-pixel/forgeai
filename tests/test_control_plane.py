@@ -3,8 +3,11 @@ from __future__ import annotations
 import time
 from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
+from forgeai.control_models import ReviewJobRequest
 from forgeai.main import app, settings
 from forgeai.models import ChangedFile, PullRequestSnapshot, Severity
 from forgeai.services.github_client import GitHubClient
@@ -22,6 +25,13 @@ def _snapshot() -> PullRequestSnapshot:
         deletions=3,
         changed_files=1,
     )
+
+
+def test_repository_identifier_is_strict() -> None:
+    assert ReviewJobRequest(repository="octocat/hello-world", pull_request=1).repository
+    for repository in ("octocat/hello world", "octocat/hello?ref=1", "../hello/world", "octocat/#repo"):
+        with pytest.raises(ValidationError):
+            ReviewJobRequest(repository=repository, pull_request=1)
 
 
 def test_control_plane_job_evidence_approval_and_execution(tmp_path) -> None:
