@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import base64
 import time
 from typing import Any
 
 import httpx
 
-from forgeai.models import PullRequestSnapshot
+from forgeai.models import ChangedFile, PullRequestSnapshot
 
 
 class GitHubAPIError(RuntimeError):
@@ -14,7 +15,10 @@ class GitHubAPIError(RuntimeError):
 
 class GitHubClient:
     def __init__(
-        self, token: str | None = None, timeout: float = 15.0, max_retries: int = 3
+        self,
+        token: str | None = None,
+        timeout: float = 15.0,
+        max_retries: int = 3,
     ) -> None:
         headers = {
             "Accept": "application/vnd.github+json",
@@ -49,7 +53,6 @@ class GitHubClient:
                 return response
             if attempt == self._max_retries:
                 return response
-
             retry_after = response.headers.get("Retry-After")
             if retry_after and retry_after.isdigit():
                 delay = float(retry_after)
@@ -71,41 +74,90 @@ class GitHubClient:
         except ValueError as exc:
             raise GitHubAPIError(f"GitHub returned invalid JSON for {endpoint}") from exc
 
-    def get_pull_request(self, repository: str, pull_request: int) -> PullRequestSnapshot:
+    def _get_pull_request_payload(self, repository: str, pull_request: int) -> dict[str, Any]:
         payload = self._raise_for_payload(
             self._request("GET", f"/repos/{repository}/pulls/{pull_request}"),
             "pull request",
         )
         if not isinstance(payload, dict):
             raise GitHubAPIError("GitHub returned a malformed pull request payload")
+        return payload
 
-        filenames: list[str] = []
+    def get_pull_request_files(
+        self, repository: str, pull_request: int, max_pages: int = 5
+    ) -> list[ChangedFile]:
+        changed_files: list[ChangedFile] = []
         page = 1
-        while page <= 5:
-            files_response = self._request(
+        while page <= max_pages:
+            response = self._request(
                 "GET",
                 f"/repos/{repository}/pulls/{pull_request}/files",
                 params={"per_page": 100, "page": page},
             )
-            files_payload = self._raise_for_payload(files_response, "changed-files")
-            if not isinstance(files_payload, list):
+            payload = self._raise_for_payload(response, "changed-files")
+            if not isinstance(payload, list):
                 raise GitHubAPIError("GitHub returned a malformed changed-files payload")
-            for item in files_payload:
+            for item in payload:
                 if not isinstance(item, dict) or not isinstance(item.get("filename"), str):
                     raise GitHubAPIError("GitHub returned a malformed changed-file entry")
-                filenames.append(item["filename"])
-            if len(files_payload) < 100:
+                changed_files.append(
+                    ChangedFile(
+                        path=item["filename"],
+                        status=str(item.get("status", "modified")),
+                        additions=int(item.get("additions", 0)),
+                        deletions=int(item.get("deletions", 0)),
+                        patch=item.get("patch") if isinstance(item.get("patch"), str) else None,
+                    )
+                )
+            if len(payload) < 100:
                 break
             page += 1
+        return changed_files
 
-        return PullRequestSnapshot(
+    def get_pull_request_bundle(
+        self, repository: str, pull_request: int
+    ) -> tuple[PullRequestSnapshot, list[ChangedFile]]:
+        payload = self._get_pull_request_payload(repository, pull_request)
+        changed_files = self.get_pull_request_files(repository, pull_request)
+
+        head = payload.get("head")
+        base = payload.get("base")
+        head_sha = head.get("sha", "") if isinstance(head, dict) else ""
+        head_ref = head.get("ref", "") if isinstance(head, dict) else ""
+        base_ref = base.get("ref", "") if isinstance(base, dict) else ""
+
+        snapshot = PullRequestSnapshot(
             repository=repository,
             pull_request=pull_request,
-            title=payload.get("title", ""),
-            state=payload.get("state", "unknown"),
+            title=str(payload.get("title", "")),
+            state=str(payload.get("state", "unknown")),
             draft=bool(payload.get("draft", False)),
-            filenames=filenames,
+            head_sha=head_sha,
+            head_ref=head_ref,
+            base_ref=base_ref,
+            filenames=[item.path for item in changed_files],
             additions=int(payload.get("additions", 0)),
             deletions=int(payload.get("deletions", 0)),
-            changed_files=int(payload.get("changed_files", len(filenames))),
+            changed_files=int(payload.get("changed_files", len(changed_files))),
         )
+        return snapshot, changed_files
+
+    def get_pull_request(self, repository: str, pull_request: int) -> PullRequestSnapshot:
+        snapshot, _ = self.get_pull_request_bundle(repository, pull_request)
+        return snapshot
+
+    def get_file_content(self, repository: str, path: str, ref: str) -> str | None:
+        response = self._request(
+            "GET",
+            f"/repos/{repository}/contents/{path}",
+            params={"ref": ref},
+        )
+        payload = self._raise_for_payload(response, "file-content")
+        if not isinstance(payload, dict):
+            return None
+        if payload.get("encoding") != "base64" or not isinstance(payload.get("content"), str):
+            return None
+        try:
+            return base64.b64decode(payload["content"]).decode("utf-8", errors="replace")
+        except (ValueError, UnicodeError) as exc:
+            raise GitHubAPIError(f"GitHub returned undecodable content for {path}") from exc
