@@ -21,7 +21,7 @@ class RetrievedDocument:
 def _cosine(left: list[float], right: list[float]) -> float:
     if not left or not right or len(left) != len(right):
         return 0.0
-    numerator = sum(a * b for a, b in zip(left, right))
+    numerator = sum(a * b for a, b in zip(left, right, strict=True))
     left_norm = math.sqrt(sum(a * a for a in left))
     right_norm = math.sqrt(sum(b * b for b in right))
     if left_norm == 0 or right_norm == 0:
@@ -63,7 +63,11 @@ class EmbeddingProvider:
         response.raise_for_status()
         payload: Any = response.json()
         data = payload.get("data", []) if isinstance(payload, dict) else []
-        return [item["embedding"] for item in data if isinstance(item, dict) and isinstance(item.get("embedding"), list)]
+        return [
+            item["embedding"]
+            for item in data
+            if isinstance(item, dict) and isinstance(item.get("embedding"), list)
+        ]
 
 
 class RepositoryRetriever:
@@ -79,7 +83,8 @@ class RepositoryRetriever:
         documents: list[dict[str, Any]] = []
         for item in tree[: self.settings.retrieval_max_files]:
             path = item.get("path")
-            if not isinstance(path, str) or path.startswith((".git/", "node_modules/", "dist/", "build/")):
+            excluded_prefixes = (".git/", "node_modules/", "dist/", "build/")
+            if not isinstance(path, str) or path.startswith(excluded_prefixes):
                 continue
             size = int(item.get("size", 0))
             if size > 100_000:
@@ -87,10 +92,17 @@ class RepositoryRetriever:
             content = self.github.get_file_content(repository, path, ref)
             if not content:
                 continue
-            documents.append({"path": path, "content": content, "sha": item.get("sha", "")})
+            documents.append(
+                {"path": path, "content": content, "sha": item.get("sha", "")}
+            )
         if self.embeddings.enabled and documents:
-            vectors = self.embeddings.embed([item["path"] + "\n" + item["content"][:12000] for item in documents])
-            for item, vector in zip(documents, vectors):
+            vectors = self.embeddings.embed(
+                [
+                    item["path"] + "\n" + item["content"][:12000]
+                    for item in documents
+                ]
+            )
+            for item, vector in zip(documents, vectors, strict=True):
                 item["embedding"] = vector
         else:
             for item in documents:
@@ -121,6 +133,13 @@ class RepositoryRetriever:
                 tokens = _tokens(path + "\n" + content[:12000])
                 score = len(query_tokens & tokens) / max(len(query_tokens), 1)
                 mode = "lexical-fallback"
-            scored.append(RetrievedDocument(path=path, content=content[:12000], score=score, mode=mode))
+            scored.append(
+                RetrievedDocument(
+                    path=path,
+                    content=content[:12000],
+                    score=score,
+                    mode=mode,
+                )
+            )
         scored.sort(key=lambda item: item.score, reverse=True)
         return scored[:top_k]
