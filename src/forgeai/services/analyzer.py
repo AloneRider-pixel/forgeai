@@ -3,7 +3,6 @@ from collections.abc import Iterable
 
 from forgeai.models import Finding, PullRequestSnapshot, RiskFactor, Severity
 
-
 SECURITY_PATHS = re.compile(
     r"(^|/)(auth|security|permissions?|iam|oauth|sso|jwt|secrets?)(/|\.|$)", re.IGNORECASE
 )
@@ -49,9 +48,7 @@ def _add(
             paths=paths[:25],
         )
     )
-    factors.append(
-        RiskFactor(rule_id=rule_id, name=rule_id, points=points, rationale=rationale)
-    )
+    factors.append(RiskFactor(rule_id=rule_id, name=rule_id, points=points, rationale=rationale))
 
 
 def analyze(snapshot: PullRequestSnapshot) -> tuple[list[Finding], list[RiskFactor]]:
@@ -131,12 +128,14 @@ def analyze(snapshot: PullRequestSnapshot) -> tuple[list[Finding], list[RiskFact
             category="dependencies",
             title="Dependency manifests or lockfiles changed",
             detail=(
-                "Dependency inputs changed; compatibility and supply-chain impact should be checked."
+                "Dependency inputs changed; compatibility and supply-chain impact should "
+                "be checked."
             ),
             paths=dependency_paths,
             points=10,
             rationale=(
-                "Dependency changes can alter runtime behavior or introduce supply-chain risk."
+                "Dependency changes can alter runtime behavior or introduce supply-chain "
+                "risk."
             ),
         )
 
