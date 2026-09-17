@@ -61,5 +61,6 @@ def test_gate_threshold_is_configurable() -> None:
 
 def test_critical_finding_always_requires_review() -> None:
     findings, factors = analyze(snapshot(".env"))
+    gate = gate_decision(calculate_score(factors), Settings(risk_gate_threshold=100), findings)
 
-    assert gate_decision(calculate_score(factors), Settings(risk_gate_threshold=100), findings) is GateDecision.REVIEW_REQUIRED
+    assert gate is GateDecision.REVIEW_REQUIRED
