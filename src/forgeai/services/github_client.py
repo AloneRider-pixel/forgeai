@@ -54,7 +54,10 @@ class GitHubClient:
             if attempt == self._max_retries:
                 return response
             retry_after = response.headers.get("Retry-After")
-            delay = float(retry_after) if retry_after and retry_after.isdigit() else 0.25 * (2**attempt)
+            if retry_after and retry_after.isdigit():
+                delay = float(retry_after)
+            else:
+                delay = 0.25 * (2**attempt)
             time.sleep(min(delay, 5.0))
 
         raise GitHubAPIError(f"GitHub request failed: {last_error or 'unknown error'}")

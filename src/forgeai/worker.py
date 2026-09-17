@@ -11,16 +11,24 @@ from forgeai.services.review_service import ReviewService
 
 
 class ReviewWorker:
-    def __init__(self, service: ReviewService, queue: InMemoryJobQueue | RedisJobQueue) -> None:
+    def __init__(
+        self,
+        service: ReviewService,
+        queue: InMemoryJobQueue | RedisJobQueue,
+    ) -> None:
         self.service = service
         self.queue = queue
 
     async def run_forever(self) -> None:
         while True:
             job_id = await self.queue.dequeue(timeout=5)
-            if job_id:
+            if not job_id:
+                continue
+            try:
                 with review_span(job_id):
                     await self.service.process(job_id)
+            except Exception:
+                continue
 
 
 async def main() -> None:

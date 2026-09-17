@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from forgeai.db import Base
 
 
 def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class ReviewJobRecord(Base):
@@ -29,13 +29,13 @@ class ReviewJobRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
-    evidence: Mapped[list["EvidenceRecord"]] = relationship(
+    evidence: Mapped[list[EvidenceRecord]] = relationship(
         back_populates="job", cascade="all, delete-orphan"
     )
-    approval: Mapped["ApprovalRecord | None"] = relationship(
+    approval: Mapped[ApprovalRecord | None] = relationship(
         back_populates="job", uselist=False, cascade="all, delete-orphan"
     )
-    executions: Mapped[list["ExecutionRecord"]] = relationship(
+    executions: Mapped[list[ExecutionRecord]] = relationship(
         back_populates="job", cascade="all, delete-orphan"
     )
 
@@ -52,7 +52,7 @@ class EvidenceRecord(Base):
     message: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
-    job: Mapped["ReviewJobRecord"] = relationship(back_populates="evidence")
+    job: Mapped[ReviewJobRecord] = relationship(back_populates="evidence")
 
 
 class ApprovalRecord(Base):
@@ -65,7 +65,7 @@ class ApprovalRecord(Base):
     rationale: Mapped[str] = mapped_column(Text, default="")
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    job: Mapped["ReviewJobRecord"] = relationship(back_populates="approval")
+    job: Mapped[ReviewJobRecord] = relationship(back_populates="approval")
 
 
 class ExecutionRecord(Base):
@@ -79,4 +79,4 @@ class ExecutionRecord(Base):
     response_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
-    job: Mapped["ReviewJobRecord"] = relationship(back_populates="executions")
+    job: Mapped[ReviewJobRecord] = relationship(back_populates="executions")

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
@@ -28,7 +28,7 @@ class ControlPlaneRepository:
         pull_request: int,
         request: dict[str, Any],
     ) -> ReviewJobRecord:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         record = ReviewJobRecord(
             id=job_id,
             repository=repository,
@@ -59,7 +59,7 @@ class ControlPlaneRepository:
     async def set_running(self, session: AsyncSession, job_id: str) -> None:
         record = await self._require_job(session, job_id)
         record.status = JobStatus.RUNNING.value
-        record.updated_at = datetime.now(timezone.utc)
+        record.updated_at = datetime.now(UTC)
         await session.commit()
 
     async def set_result(
@@ -76,14 +76,14 @@ class ControlPlaneRepository:
         record.report_json = report
         record.plan_json = plan
         record.error = None
-        record.updated_at = datetime.now(timezone.utc)
+        record.updated_at = datetime.now(UTC)
         await session.commit()
 
     async def set_failed(self, session: AsyncSession, job_id: str, error: str) -> None:
         record = await self._require_job(session, job_id)
         record.status = JobStatus.FAILED.value
         record.error = error[:4000]
-        record.updated_at = datetime.now(timezone.utc)
+        record.updated_at = datetime.now(UTC)
         await session.commit()
 
     async def add_evidence(
@@ -113,7 +113,9 @@ class ControlPlaneRepository:
         rationale: str = "",
     ) -> ApprovalRecord:
         await self._require_job(session, job_id)
-        result = await session.execute(select(ApprovalRecord).where(ApprovalRecord.job_id == job_id))
+        result = await session.execute(
+            select(ApprovalRecord).where(ApprovalRecord.job_id == job_id)
+        )
         approval = result.scalar_one_or_none()
         if approval is None:
             approval = ApprovalRecord(id=str(uuid4()), job_id=job_id)
@@ -121,7 +123,7 @@ class ControlPlaneRepository:
         approval.state = state.value
         approval.decided_by = decided_by
         approval.rationale = rationale[:2000]
-        approval.decided_at = datetime.now(timezone.utc)
+        approval.decided_at = datetime.now(UTC)
         await session.commit()
         return approval
 

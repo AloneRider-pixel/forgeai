@@ -62,9 +62,10 @@ class ReviewService:
                 request.max_context_files,
                 request.max_file_chars,
             )
-            planner = (
-                OpenAICompatiblePlanner(self.settings) if request.use_llm else DeterministicPlanner()
-            )
+            if request.use_llm:
+                planner = OpenAICompatiblePlanner(self.settings)
+            else:
+                planner = DeterministicPlanner()
             plan = await asyncio.to_thread(planner.plan, baseline, context)
 
             async with self.database.sessions() as session:
