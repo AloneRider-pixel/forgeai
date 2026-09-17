@@ -1,10 +1,10 @@
 # ForgeAI — AI Software Engineering Platform
 
-ForgeAI is a production-oriented engineering review service that analyzes GitHub pull requests for change risk, security-sensitive changes, dependency impact, infrastructure changes, and test impact.
+ForgeAI is a production-oriented pull-request review platform for engineering organizations. It turns a GitHub pull request into a structured risk report using deterministic rules first, with explicit extension points for AI-assisted reasoning, security tooling, repository context, and controlled automation.
 
-The project starts with a deterministic analysis core so every finding is explainable and testable. LLM-assisted review, repository context, tool execution, evaluation, and observability are planned as later layers rather than being hard-coded into the domain logic.
+The goal is not to build another chat wrapper. ForgeAI models review as an auditable engineering workflow: ingest change metadata, classify risk, explain the evidence, apply policy, and expose a stable API that can later drive CI/CD and human approval workflows.
 
-## Architecture
+## What exists today
 
 ```text
 GitHub Pull Request
@@ -13,54 +13,60 @@ GitHub Pull Request
    FastAPI API
         |
         v
-   GitHub Adapter
+  GitHub Adapter ---- retry / validation / pagination
         |
         v
- Change Analyzer
+ Deterministic Rule Engine
         |
         +---- security surface
-        +---- infrastructure changes
-        +---- data / migration changes
+        +---- credential / key material
+        +---- infrastructure / deployment
+        +---- data / migration
         +---- dependency changes
-        +---- test-impact heuristics
+        +---- missing visible tests
+        +---- large change surface
         |
         v
     Risk Engine
         |
-        +---- weighted score
-        +---- policy gate
-        +---- severity findings
+        +---- 0–100 score
+        +---- severity-aware policy gate
+        +---- rule-level evidence
         |
         v
  Typed Review Report
 ```
 
-## Why this project exists
-
-Most code-review assistants are presented as chat interfaces. ForgeAI treats software engineering review as a system problem: ingest structured repository changes, apply deterministic policy, produce auditable findings, and leave clear extension points for model-assisted reasoning.
-
-## Current capabilities
+### Current capabilities
 
 - GitHub pull-request metadata and changed-file retrieval.
-- Risk classification for authentication, authorization, IAM, OAuth, secrets, infrastructure, migrations, dependencies, and source changes without visible tests.
+- Defensive upstream parsing with explicit API errors.
+- Retry handling for transient GitHub/API failures.
+- Paginated changed-file retrieval with a bounded request budget.
+- Rule IDs for traceable findings (`SEC001`, `SEC002`, `OPS001`, `DATA001`, `DEP001`, `TEST001`, `CHG001`).
+- Critical security findings force a human-review gate regardless of the configured numeric threshold.
 - Explainable 0–100 risk scoring.
 - Configurable merge-gate policy.
-- Typed Pydantic response models.
-- FastAPI + OpenAPI API.
-- Unit and API tests.
-- Docker and Docker Compose support.
-- GitHub Actions CI with Ruff, Pytest, and container build validation.
-- CodeQL workflow for the Python service.
+- Pydantic domain models with a single canonical pull-request snapshot.
+- FastAPI + OpenAPI service with health and readiness endpoints.
+- Unit, API, and GitHub-adapter tests.
+- Docker image running as a non-root user with a container healthcheck.
+- GitHub Actions CI for Ruff, Pytest, coverage reporting, and Docker builds.
+- CodeQL analysis and Dependabot configuration.
 
-## API
+## API contract
 
 ### `GET /health`
 
-Returns service health.
+Returns process health.
+
+### `GET /ready`
+
+Returns service readiness. The baseline implementation deliberately avoids making an external GitHub call on this endpoint.
 
 ### `POST /v1/reviews`
 
-Example request:
+Request:
 
 ```json
 {
@@ -69,73 +75,57 @@ Example request:
 }
 ```
 
-The response includes the pull-request metadata, risk score, gate decision, findings, and risk factors.
+Response shape:
 
-### `GET /docs`
-
-Interactive OpenAPI documentation.
-
-## Local development
-
-Requirements: Python 3.11+, Docker, and a GitHub token when reviewing private repositories.
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-cp .env.example .env
-uvicorn forgeai.main:app --reload
+```json
+{
+  "snapshot": {
+    "repository": "octocat/Hello-World",
+    "pull_request": 42,
+    "title": "Add authentication flow",
+    "state": "open",
+    "draft": false,
+    "filenames": ["src/auth/router.py", "tests/test_auth.py"],
+    "additions": 42,
+    "deletions": 8,
+    "changed_files": 2
+  },
+  "risk_score": 30,
+  "gate": "review_required",
+  "findings": [],
+  "factors": []
+}
 ```
 
-Open `http://localhost:8000/docs`.
+OpenAPI is available at `/docs`.
 
-Run tests:
+## Engineering principles
 
-```bash
-pytest
-```
+### Deterministic baseline
 
-Run lint:
+The initial decision layer does not depend on an LLM. That makes results reproducible, testable, and suitable as a benchmark baseline for later model-assisted components.
 
-```bash
-ruff check src tests
-```
+### Evidence before prose
 
-Run with Docker:
+Every finding has a stable rule ID, severity, category, explanation, and affected paths. The intended production system can therefore store or audit decisions without depending on generated narrative.
 
-```bash
-docker compose up --build
-```
+### Policy is separate from detection
 
-## Configuration
+Rules produce risk evidence. The risk engine converts that evidence into a score and policy gate. This separation allows organizations to change thresholds without rewriting the analyzer.
 
-| Variable | Purpose | Default |
-| --- | --- | --- |
-| `GITHUB_TOKEN` | GitHub API token | empty |
-| `RISK_GATE_THRESHOLD` | Maximum score allowed by the baseline policy | `60` |
-| `HTTP_TIMEOUT_SECONDS` | GitHub API timeout | `15` |
+### External APIs behind adapters
 
-The public GitHub API can be used without a token for public repositories, subject to GitHub's API limits. Supply `GITHUB_TOKEN` for authenticated access.
+GitHub HTTP details are isolated in a small adapter. The analyzer works on an internal snapshot model and does not depend on GitHub response shapes.
 
-## Engineering decisions
+### Fail closed on malformed data
 
-### Deterministic core first
+Malformed pull-request or changed-file payloads become explicit service errors instead of silent partial reviews.
 
-The baseline analyzer does not require an LLM. That makes behavior reproducible and allows future AI components to be evaluated against a stable baseline.
+### Safe runtime defaults
 
-### Policy as a primitive
+The Docker image uses a dedicated non-root user. Repository and secret files are excluded from the Docker build context.
 
-A risk score is accompanied by explicit factors and a gate decision. Consumers can inspect why a review crossed the policy threshold.
-
-### GitHub behind an adapter
-
-External API payloads are translated into a small internal snapshot model. The analysis engine does not depend directly on GitHub HTTP details.
-
-### Fail closed on malformed upstream data
-
-Unexpected pull-request data is rejected rather than silently producing a partial review.
-
-## Project structure
+## Repository layout
 
 ```text
 forgeai/
@@ -149,26 +139,85 @@ forgeai/
 │       └── risk.py
 ├── tests/
 │   ├── test_analyzer.py
-│   └── test_api.py
-├── .github/workflows/
-│   ├── ci.yml
-│   └── codeql.yml
+│   ├── test_api.py
+│   └── test_github_client.py
+├── .github/
+│   ├── workflows/
+│   │   ├── ci.yml
+│   │   └── codeql.yml
+│   └── dependabot.yml
+├── docs/
 ├── Dockerfile
 ├── docker-compose.yml
+├── .dockerignore
 ├── pyproject.toml
-└── SECURITY.md
+├── SECURITY.md
+└── LICENSE
 ```
 
-## Roadmap
+## Roadmap to the full platform
 
-1. LLM-assisted review planning with structured outputs.
-2. GitHub Actions execution and artifact collection.
-3. CodeQL and dependency-review result ingestion.
-4. MCP-based, allowlisted tool gateway.
-5. Repository semantic search and retrieval.
-6. Offline evaluation benchmark over seeded repositories.
-7. OpenTelemetry traces, Prometheus metrics, and cost/latency telemetry.
-8. Human approval workflow before automated actions.
+### Phase 1 — review intelligence
+
+1. LLM-assisted review planning with structured JSON outputs.
+2. Provider abstraction for OpenAI-compatible and hosted model backends.
+3. Repository-aware retrieval over changed code, tests, ownership, and configuration.
+4. CodeQL and dependency-review result ingestion.
+5. Offline benchmark suite with seeded repositories and regression thresholds.
+
+### Phase 2 — controlled engineering actions
+
+6. GitHub Actions execution adapter for checks and artifact collection.
+7. MCP-based tool gateway with strict allowlists and action permissions.
+8. Human approval state machine before write operations.
+9. Idempotency keys, audit events, and durable review records.
+
+### Phase 3 — production operations
+
+10. Postgres persistence and review history.
+11. Redis-backed asynchronous job execution.
+12. OpenTelemetry traces, Prometheus metrics, and structured logs.
+13. Cost, latency, rule-hit, and model-quality telemetry.
+14. Authentication, organization-level policies, and rate limiting.
+
+## Local development
+
+Requirements: Python 3.11+, Docker, and a GitHub token when reviewing private repositories.
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+cp .env.example .env
+uvicorn forgeai.main:app --reload
+```
+
+Run the quality gates locally:
+
+```bash
+ruff check src tests
+pytest --cov=forgeai --cov-report=term-missing
+```
+
+Run the service in Docker:
+
+```bash
+docker compose up --build
+```
+
+## Configuration
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `GITHUB_TOKEN` | GitHub API token | empty |
+| `RISK_GATE_THRESHOLD` | Maximum numeric score allowed by the baseline policy | `60` |
+| `HTTP_TIMEOUT_SECONDS` | GitHub request timeout | `15` |
+
+The public GitHub API can be used without a token for public repositories, subject to GitHub's API limits. Supply `GITHUB_TOKEN` for authenticated access.
+
+## Status
+
+ForgeAI `0.2.0` is the hardened deterministic core. The AI-agent, retrieval, persistence, and controlled-action layers are intentionally staged as separate capabilities so each can be evaluated before being connected to production automation.
 
 ## License
 
