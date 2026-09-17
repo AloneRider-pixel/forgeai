@@ -96,7 +96,9 @@ class WebhookDeliveryRecord(Base):
     pull_request: Mapped[int | None] = mapped_column(Integer, nullable=True)
     payload_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     status: Mapped[str] = mapped_column(String(30), index=True)
-    job_id: Mapped[str | None] = mapped_column(ForeignKey("review_jobs.id"), nullable=True, index=True)
+    job_id: Mapped[str | None] = mapped_column(
+        ForeignKey("review_jobs.id"), nullable=True, index=True
+    )
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
