@@ -4,7 +4,7 @@ import re
 from collections.abc import Iterable
 
 from forgeai.models import ChangedFile, ContextSnippet, Finding, PullRequestSnapshot
-from forgeai.services.github_client import GitHubClient, GitHubAPIError
+from forgeai.services.github_client import GitHubAPIError, GitHubClient
 
 SOURCE_EXTENSIONS = (
     ".py",
@@ -47,7 +47,10 @@ def _relevance(query: str, content: str, path: str) -> float:
 
 def redact_secrets(text: str) -> tuple[str, bool]:
     redacted = PRIVATE_KEY_BLOCK.sub("[REDACTED PRIVATE KEY]", text)
-    redacted = SECRET_VALUE.sub(lambda match: f"{match.group(1)}{match.group(2)}[REDACTED]", redacted)
+    redacted = SECRET_VALUE.sub(
+        lambda match: f"{match.group(1)}{match.group(2)}[REDACTED]",
+        redacted,
+    )
     return redacted, redacted != text
 
 
@@ -71,7 +74,9 @@ def collect_context(
 
     query = build_context_query(snapshot, findings)
     candidates = [
-        item for item in changed_files if item.status != "removed"
+        item
+        for item in changed_files
+        if item.status != "removed"
         and item.path.lower().endswith(SOURCE_EXTENSIONS)
     ]
     candidates.sort(
@@ -85,7 +90,11 @@ def collect_context(
     snippets: list[ContextSnippet] = []
     for item in candidates[:max_files]:
         try:
-            content = client.get_file_content(snapshot.repository, item.path, snapshot.head_sha)
+            content = client.get_file_content(
+                snapshot.repository,
+                item.path,
+                snapshot.head_sha,
+            )
         except GitHubAPIError:
             continue
         if content is None:
