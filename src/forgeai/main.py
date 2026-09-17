@@ -1,7 +1,8 @@
 import asyncio
+import json
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
 from forgeai.config import get_settings
@@ -32,6 +33,7 @@ from forgeai.services.planner import DeterministicPlanner, OpenAICompatiblePlann
 from forgeai.services.review_engine import build_report
 from forgeai.services.review_service import ReviewService
 from forgeai.tool_gateway import ToolGateway, ToolPolicyError
+from forgeai.webhook import GitHubWebhookService, WebhookDispatcher, WebhookValidationError, verify_signature
 
 settings = get_settings()
 configure_tracing()
@@ -44,13 +46,17 @@ async def lifespan(app: FastAPI):
     github = GitHubClient(token=settings.github_token, timeout=settings.http_timeout_seconds)
     queue = RedisJobQueue(settings.redis_url) if settings.redis_url else InMemoryJobQueue()
     service = ReviewService(database, github, settings)
+    webhook_service = GitHubWebhookService(database, queue, settings)
+    dispatcher = WebhookDispatcher(database, queue, settings)
+    stop_event = asyncio.Event()
     app.state.database = database
     app.state.github_client = github
     app.state.job_queue = queue
     app.state.review_service = service
     app.state.tool_gateway = ToolGateway(github, settings)
+    app.state.webhook_service = webhook_service
 
-    worker_task = None
+    local_worker_task = None
     if isinstance(queue, InMemoryJobQueue):
 
         async def local_worker() -> None:
@@ -64,14 +70,21 @@ async def lifespan(app: FastAPI):
                 except Exception:
                     continue
 
-        worker_task = asyncio.create_task(local_worker())
+        local_worker_task = asyncio.create_task(local_worker())
 
+    dispatcher_task = asyncio.create_task(dispatcher.run_forever(stop_event))
     yield
 
-    if worker_task:
-        worker_task.cancel()
+    stop_event.set()
+    dispatcher_task.cancel()
+    try:
+        await dispatcher_task
+    except asyncio.CancelledError:
+        pass
+    if local_worker_task:
+        local_worker_task.cancel()
         try:
-            await worker_task
+            await local_worker_task
         except asyncio.CancelledError:
             pass
     github.close()
@@ -82,7 +95,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="ForgeAI",
-    version="0.4.0",
+    version="0.5.0",
     description="Production-oriented GitHub pull request risk review platform and control plane.",
     lifespan=lifespan,
 )
@@ -256,6 +269,61 @@ async def execute_tool(job_id: str, request: ExecutionRequest) -> ExecutionRespo
         status="succeeded",
         response=result,
     )
+
+
+@app.post("/v1/webhooks/github")
+async def github_webhook(
+    request: Request,
+    x_github_event: str = Header(..., alias="X-GitHub-Event"),
+    x_github_delivery: str = Header(..., alias="X-GitHub-Delivery"),
+    x_hub_signature_256: str | None = Header(None, alias="X-Hub-Signature-256"),
+) -> JSONResponse:
+    body = await request.body()
+    if len(body) > 1_000_000:
+        raise HTTPException(status_code=413, detail="webhook payload is too large")
+    try:
+        verify_signature(body, x_hub_signature_256, settings.github_webhook_secret)
+    except WebhookValidationError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="invalid JSON payload") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="webhook payload must be a JSON object")
+
+    try:
+        result = await app.state.webhook_service.ingest(
+            x_github_delivery,
+            x_github_event,
+            payload,
+        )
+    except WebhookValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    status_code = 202 if result["accepted"] else 200
+    return JSONResponse(result, status_code=status_code)
+
+
+@app.get("/v1/webhooks/github/{delivery_id}")
+async def get_webhook_delivery(delivery_id: str) -> dict[str, object]:
+    async with app.state.database.sessions() as session:
+        record = await ControlPlaneRepository().get_webhook_delivery(session, delivery_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="webhook delivery not found")
+    return {
+        "delivery_id": record.delivery_id,
+        "event_type": record.event_type,
+        "action": record.action,
+        "repository": record.repository,
+        "pull_request": record.pull_request,
+        "status": record.status,
+        "job_id": record.job_id,
+        "attempts": record.attempts,
+        "last_error": record.last_error,
+        "created_at": record.created_at,
+        "updated_at": record.updated_at,
+        "completed_at": record.completed_at,
+    }
 
 
 @app.post("/mcp")
