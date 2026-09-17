@@ -2,9 +2,16 @@ import asyncio
 import json
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Header, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
+from forgeai.auth import (
+    Principal,
+    ROLE_OPERATOR,
+    ROLE_READER,
+    ROLE_REVIEWER,
+    require_role,
+)
 from forgeai.config import get_settings
 from forgeai.control_models import (
     ApprovalDecisionRequest,
@@ -13,6 +20,11 @@ from forgeai.control_models import (
     ExecutionRequest,
     ExecutionResponse,
     JobDetailResponse,
+    RetrievalHit,
+    RetrievalIndexRequest,
+    RetrievalIndexResponse,
+    RetrievalSearchRequest,
+    RetrievalSearchResponse,
     ReviewJobRequest,
     ReviewJobResponse,
 )
@@ -27,6 +39,7 @@ from forgeai.models import (
 from forgeai.observability import configure_tracing, metrics_payload, review_span
 from forgeai.queue import InMemoryJobQueue, RedisJobQueue, queue_health
 from forgeai.repository import ControlPlaneRepository
+from forgeai.retrieval import RepositoryRetriever
 from forgeai.services.context import collect_context
 from forgeai.services.github_client import GitHubAPIError, GitHubClient
 from forgeai.services.planner import DeterministicPlanner, OpenAICompatiblePlanner
@@ -41,23 +54,28 @@ from forgeai.webhook import (
 )
 
 settings = get_settings()
-configure_tracing()
+configure_tracing(settings)
+read_access = require_role(ROLE_READER)
+review_access = require_role(ROLE_REVIEWER)
+operator_access = require_role(ROLE_OPERATOR)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    database = Database(settings.database_url)
+    database = Database(settings.database_url, auto_create_schema=settings.auto_create_schema)
     await database.init()
     github = GitHubClient(token=settings.github_token, timeout=settings.http_timeout_seconds)
     queue = RedisJobQueue(settings.redis_url) if settings.redis_url else InMemoryJobQueue()
     service = ReviewService(database, github, settings)
     webhook_service = GitHubWebhookService(database, queue, settings)
     dispatcher = WebhookDispatcher(database, queue, settings)
+    retriever = RepositoryRetriever(github, settings)
     stop_event = asyncio.Event()
     app.state.database = database
     app.state.github_client = github
     app.state.job_queue = queue
     app.state.review_service = service
+    app.state.retriever = retriever
     app.state.tool_gateway = ToolGateway(github, settings)
     app.state.webhook_service = webhook_service
 
@@ -100,7 +118,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="ForgeAI",
-    version="0.5.0",
+    version="0.6.0",
     description="Production-oriented GitHub pull request risk review platform and control plane.",
     lifespan=lifespan,
 )
@@ -128,7 +146,7 @@ def metrics() -> Response:
 
 
 @app.get("/v1/tools")
-def list_tools() -> dict[str, object]:
+def list_tools(_: Principal = Depends(read_access)) -> dict[str, object]:
     return {"tools": app.state.tool_gateway.list_tools()}
 
 
@@ -137,7 +155,9 @@ def _build_report(snapshot: PullRequestSnapshot) -> ReviewReport:
 
 
 @app.post("/v1/reviews", response_model=ReviewReport)
-def create_review(request: PullRequestRequest) -> ReviewReport:
+def create_review(
+    request: PullRequestRequest, _: Principal = Depends(read_access)
+) -> ReviewReport:
     client: GitHubClient = app.state.github_client
     try:
         snapshot = client.get_pull_request(request.repository, request.pull_request)
@@ -147,7 +167,9 @@ def create_review(request: PullRequestRequest) -> ReviewReport:
 
 
 @app.post("/v1/reviews/assisted", response_model=AssistedReviewReport)
-def create_assisted_review(request: AssistedReviewRequest) -> AssistedReviewReport:
+def create_assisted_review(
+    request: AssistedReviewRequest, _: Principal = Depends(read_access)
+) -> AssistedReviewReport:
     client: GitHubClient = app.state.github_client
     try:
         snapshot, changed_files = client.get_pull_request_bundle(
@@ -170,7 +192,9 @@ def create_assisted_review(request: AssistedReviewRequest) -> AssistedReviewRepo
 
 
 @app.post("/v1/jobs", response_model=ReviewJobResponse, status_code=202)
-async def create_job(request: ReviewJobRequest) -> ReviewJobResponse:
+async def create_job(
+    request: ReviewJobRequest, _: Principal = Depends(read_access)
+) -> ReviewJobResponse:
     service: ReviewService = app.state.review_service
     job_id = await service.create_job(request)
     await app.state.job_queue.enqueue(job_id)
@@ -180,14 +204,16 @@ async def create_job(request: ReviewJobRequest) -> ReviewJobResponse:
 
 
 @app.get("/v1/jobs", response_model=list[ReviewJobResponse])
-async def list_jobs() -> list[ReviewJobResponse]:
+async def list_jobs(_: Principal = Depends(read_access)) -> list[ReviewJobResponse]:
     async with app.state.database.sessions() as session:
         records = await ControlPlaneRepository().list_jobs(session)
     return [ControlPlaneRepository.to_response(record) for record in records]
 
 
 @app.get("/v1/jobs/{job_id}", response_model=JobDetailResponse)
-async def get_job(job_id: str) -> JobDetailResponse:
+async def get_job(
+    job_id: str, _: Principal = Depends(read_access)
+) -> JobDetailResponse:
     async with app.state.database.sessions() as session:
         record = await ControlPlaneRepository().get_job(session, job_id)
     if record is None:
@@ -196,7 +222,11 @@ async def get_job(job_id: str) -> JobDetailResponse:
 
 
 @app.post("/v1/jobs/{job_id}/evidence", response_model=JobDetailResponse)
-async def ingest_evidence(job_id: str, request: EvidenceBatchRequest) -> JobDetailResponse:
+async def ingest_evidence(
+    job_id: str,
+    request: EvidenceBatchRequest,
+    _: Principal = Depends(review_access),
+) -> JobDetailResponse:
     try:
         await app.state.review_service.add_evidence_and_recompute_gate(job_id, request.findings)
     except ValueError as exc:
@@ -205,7 +235,12 @@ async def ingest_evidence(job_id: str, request: EvidenceBatchRequest) -> JobDeta
 
 
 @app.post("/v1/jobs/{job_id}/evidence/sarif", response_model=JobDetailResponse)
-async def ingest_sarif(job_id: str, source: str, payload: dict[str, object]) -> JobDetailResponse:
+async def ingest_sarif(
+    job_id: str,
+    source: str,
+    payload: dict[str, object],
+    _: Principal = Depends(review_access),
+) -> JobDetailResponse:
     from forgeai.control_models import EvidenceSource
     from forgeai.evidence_ingest import parse_sarif
 
@@ -224,12 +259,15 @@ async def ingest_sarif(job_id: str, source: str, payload: dict[str, object]) -> 
 
 
 async def _decide_approval(
-    job_id: str, state: ApprovalState, request: ApprovalDecisionRequest
+    job_id: str,
+    state: ApprovalState,
+    request: ApprovalDecisionRequest,
+    principal: Principal,
 ) -> JobDetailResponse:
     async with app.state.database.sessions() as session:
         try:
             await ControlPlaneRepository().upsert_approval(
-                session, job_id, state, request.decided_by, request.rationale
+                session, job_id, state, principal.key_id, request.rationale
             )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -237,17 +275,29 @@ async def _decide_approval(
 
 
 @app.post("/v1/jobs/{job_id}/approval/approve", response_model=JobDetailResponse)
-async def approve_job(job_id: str, request: ApprovalDecisionRequest) -> JobDetailResponse:
-    return await _decide_approval(job_id, ApprovalState.APPROVED, request)
+async def approve_job(
+    job_id: str,
+    request: ApprovalDecisionRequest,
+    principal: Principal = Depends(review_access),
+) -> JobDetailResponse:
+    return await _decide_approval(job_id, ApprovalState.APPROVED, request, principal)
 
 
 @app.post("/v1/jobs/{job_id}/approval/reject", response_model=JobDetailResponse)
-async def reject_job(job_id: str, request: ApprovalDecisionRequest) -> JobDetailResponse:
-    return await _decide_approval(job_id, ApprovalState.REJECTED, request)
+async def reject_job(
+    job_id: str,
+    request: ApprovalDecisionRequest,
+    principal: Principal = Depends(review_access),
+) -> JobDetailResponse:
+    return await _decide_approval(job_id, ApprovalState.REJECTED, request, principal)
 
 
 @app.post("/v1/jobs/{job_id}/execute", response_model=ExecutionResponse)
-async def execute_tool(job_id: str, request: ExecutionRequest) -> ExecutionResponse:
+async def execute_tool(
+    job_id: str,
+    request: ExecutionRequest,
+    _: Principal = Depends(operator_access),
+) -> ExecutionResponse:
     async with app.state.database.sessions() as session:
         record = await ControlPlaneRepository().get_job(session, job_id)
     if record is None:
@@ -273,6 +323,60 @@ async def execute_tool(job_id: str, request: ExecutionRequest) -> ExecutionRespo
         tool_name=request.tool_name,
         status="succeeded",
         response=result,
+    )
+
+
+@app.post("/v1/retrieval/index", response_model=RetrievalIndexResponse)
+async def index_repository(
+    request: RetrievalIndexRequest,
+    _: Principal = Depends(operator_access),
+) -> RetrievalIndexResponse:
+    documents = await asyncio.to_thread(
+        app.state.retriever.index_repository, request.repository, request.ref
+    )
+    async with app.state.database.sessions() as session:
+        count = await ControlPlaneRepository().upsert_repository_documents(
+            session, request.repository, request.ref, documents
+        )
+    mode = "embedding" if app.state.retriever.embeddings.enabled else "lexical-fallback"
+    return RetrievalIndexResponse(
+        repository=request.repository,
+        ref=request.ref,
+        documents_indexed=count,
+        mode=mode,
+    )
+
+
+@app.post("/v1/retrieval/search", response_model=RetrievalSearchResponse)
+async def search_repository(
+    request: RetrievalSearchRequest,
+    _: Principal = Depends(read_access),
+) -> RetrievalSearchResponse:
+    async with app.state.database.sessions() as session:
+        records = await ControlPlaneRepository().list_repository_documents(
+            session, request.repository, request.ref
+        )
+    documents = [
+        {
+            "path": record.path,
+            "content": record.content,
+            "embedding": record.embedding_json,
+            "sha": record.sha,
+        }
+        for record in records
+    ]
+    results = await asyncio.to_thread(
+        app.state.retriever.search, request.query, documents, request.top_k
+    )
+    hits = [
+        RetrievalHit(path=item.path, score=item.score, mode=item.mode, content=item.content)
+        for item in results
+    ]
+    return RetrievalSearchResponse(
+        repository=request.repository,
+        ref=request.ref,
+        query=request.query,
+        hits=hits,
     )
 
 
@@ -310,7 +414,9 @@ async def github_webhook(
 
 
 @app.get("/v1/webhooks/github/{delivery_id}")
-async def get_webhook_delivery(delivery_id: str) -> dict[str, object]:
+async def get_webhook_delivery(
+    delivery_id: str, _: Principal = Depends(read_access)
+) -> dict[str, object]:
     async with app.state.database.sessions() as session:
         record = await ControlPlaneRepository().get_webhook_delivery(session, delivery_id)
     if record is None:
@@ -332,7 +438,9 @@ async def get_webhook_delivery(delivery_id: str) -> dict[str, object]:
 
 
 @app.post("/mcp")
-async def mcp_gateway(message: dict[str, object]) -> JSONResponse:
+async def mcp_gateway(
+    message: dict[str, object], _: Principal = Depends(operator_access)
+) -> JSONResponse:
     method = message.get("method")
     request_id = message.get("id")
     if method == "tools/list":
