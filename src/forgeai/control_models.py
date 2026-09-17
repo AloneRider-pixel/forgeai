@@ -38,7 +38,7 @@ class EvidenceBatchRequest(BaseModel):
 
 
 class ReviewJobRequest(BaseModel):
-    repository: str = Field(pattern=r"^[^/\s]+/[^/\s]+$")
+    repository: str = Field(pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
     pull_request: int = Field(gt=0)
     use_llm: bool = False
     max_context_files: int = Field(default=5, ge=1, le=10)
