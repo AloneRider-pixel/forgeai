@@ -12,8 +12,8 @@ from forgeai.main import app, settings
 from forgeai.models import ChangedFile, PullRequestSnapshot
 from forgeai.webhook import normalize_pull_request_event, verify_signature
 
-
 SECRET = "test-webhook-secret"
+DELIVERY_ID = "12345678-aaaa-bbbb-cccc-ddddeeeeffff"
 
 
 def _payload() -> dict[str, object]:
@@ -45,13 +45,12 @@ def _snapshot() -> PullRequestSnapshot:
 
 def test_signature_verification() -> None:
     body = b'{"action":"opened"}'
-    signature = _signed(body)
-    verify_signature(body, signature, SECRET)
+    verify_signature(body, _signed(body), SECRET)
 
 
 def test_normalize_ignores_unsupported_action() -> None:
     event = normalize_pull_request_event(
-        "12345678-aaaa-bbbb-cccc-ddddeeeeffff",
+        DELIVERY_ID,
         "pull_request",
         {"action": "closed"},
     )
@@ -66,49 +65,43 @@ def test_github_webhook_is_signed_idempotent_and_dispatched(tmp_path) -> None:
     body = json.dumps(_payload(), separators=(",", ":")).encode()
     headers = {
         "X-GitHub-Event": "pull_request",
-        "X-GitHub-Delivery": "12345678-aaaa-bbbb-cccc-ddddeeeeffff",
+        "X-GitHub-Delivery": DELIVERY_ID,
         "X-Hub-Signature-256": _signed(body),
         "Content-Type": "application/json",
     }
     changed_files = [ChangedFile(path="src/app.py", additions=12, deletions=2)]
     try:
-        with patch.object(
-            type(app.state.github_client) if hasattr(app.state, "github_client") else object,
-            "noop",
-            create=True,
+        with patch(
+            "forgeai.services.github_client.GitHubClient.get_pull_request_bundle",
+            return_value=(_snapshot(), changed_files),
+        ), patch(
+            "forgeai.services.github_client.GitHubClient.get_file_content",
+            return_value="def run():\n    return True\n",
         ):
-            with patch("forgeai.services.github_client.GitHubClient.get_pull_request_bundle", return_value=(_snapshot(), changed_files)), patch(
-                "forgeai.services.github_client.GitHubClient.get_file_content",
-                return_value="def run():\n    return True\n",
-            ):
-                with TestClient(app) as client:
-                    first = client.post("/v1/webhooks/github", content=body, headers=headers)
-                    assert first.status_code == 202
-                    assert first.json()["accepted"] is True
-                    assert first.json()["duplicate"] is False
-                    job_id = first.json()["job_id"]
+            with TestClient(app) as client:
+                first = client.post("/v1/webhooks/github", content=body, headers=headers)
+                assert first.status_code == 202
+                assert first.json()["accepted"] is True
+                assert first.json()["duplicate"] is False
+                job_id = first.json()["job_id"]
 
-                    duplicate = client.post(
-                        "/v1/webhooks/github", content=body, headers=headers
-                    )
-                    assert duplicate.status_code == 202
-                    assert duplicate.json()["duplicate"] is True
-                    assert duplicate.json()["job_id"] == job_id
+                duplicate = client.post(
+                    "/v1/webhooks/github", content=body, headers=headers
+                )
+                assert duplicate.status_code == 202
+                assert duplicate.json()["duplicate"] is True
+                assert duplicate.json()["job_id"] == job_id
 
-                    delivery = client.get(
-                        "/v1/webhooks/github/12345678-aaaa-bbbb-cccc-ddddeeeeffff"
-                    )
-                    for _ in range(60):
-                        if delivery.json()["status"] == "completed":
-                            break
-                        time.sleep(0.05)
-                        delivery = client.get(
-                            "/v1/webhooks/github/12345678-aaaa-bbbb-cccc-ddddeeeeffff"
-                        )
-                    assert delivery.json()["status"] == "completed"
-                    job = client.get(f"/v1/jobs/{job_id}")
-                    assert job.json()["status"] == "succeeded"
-                    assert job.json()["pull_request"] == 42
+                delivery = client.get(f"/v1/webhooks/github/{DELIVERY_ID}")
+                for _ in range(60):
+                    if delivery.json()["status"] == "completed":
+                        break
+                    time.sleep(0.05)
+                    delivery = client.get(f"/v1/webhooks/github/{DELIVERY_ID}")
+                assert delivery.json()["status"] == "completed"
+                job = client.get(f"/v1/jobs/{job_id}")
+                assert job.json()["status"] == "succeeded"
+                assert job.json()["pull_request"] == 42
     finally:
         settings.database_url = original_database_url
         settings.github_webhook_secret = original_secret
@@ -127,7 +120,7 @@ def test_webhook_rejects_bad_signature(tmp_path) -> None:
                 content=body,
                 headers={
                     "X-GitHub-Event": "pull_request",
-                    "X-GitHub-Delivery": "12345678-aaaa-bbbb-cccc-ddddeeeeffff",
+                    "X-GitHub-Delivery": DELIVERY_ID,
                     "X-Hub-Signature-256": "sha256=" + "0" * 64,
                 },
             )
