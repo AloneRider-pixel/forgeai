@@ -6,10 +6,10 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
 from forgeai.auth import (
-    Principal,
     ROLE_OPERATOR,
     ROLE_READER,
     ROLE_REVIEWER,
+    Principal,
     require_role,
 )
 from forgeai.config import get_settings
