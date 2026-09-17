@@ -22,13 +22,18 @@ def test_assisted_review_returns_context_and_plan() -> None:
         ChangedFile(path="src/auth/service.py", additions=35, deletions=5),
         ChangedFile(path="tests/test_auth.py", additions=7, deletions=3),
     ]
+    content = (
+        'def authenticate(token):\n'
+        '    api_key = "super-secret-value"\n'
+        '    return token == api_key\n'
+    )
 
     with patch(
         "forgeai.main.GitHubClient.get_pull_request_bundle",
         return_value=(snapshot, changed_files),
     ), patch(
         "forgeai.main.GitHubClient.get_file_content",
-        return_value='def authenticate(token):\n    api_key = "super-secret-value"\n    return token == api_key\n',
+        return_value=content,
     ):
         with TestClient(app) as client:
             response = client.post(
