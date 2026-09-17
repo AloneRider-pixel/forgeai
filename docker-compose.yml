@@ -1,0 +1,9 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      RISK_GATE_THRESHOLD: ${RISK_GATE_THRESHOLD:-60}
+      HTTP_TIMEOUT_SECONDS: ${HTTP_TIMEOUT_SECONDS:-15}
