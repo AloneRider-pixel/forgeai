@@ -1,0 +1,1 @@
+Placeholder file; intentionally not part of pytest discovery.
