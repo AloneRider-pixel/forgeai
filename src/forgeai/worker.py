@@ -33,7 +33,9 @@ class ReviewWorker:
                 attributes = {
                     "review.repository": record.repository,
                     "review.pull_request": record.pull_request,
-                    "review.trigger_source": str(record.request_json.get("trigger_source", "unknown")),
+                    "review.trigger_source": str(
+                        record.request_json.get("trigger_source", "unknown")
+                    ),
                 }
             try:
                 with review_span(job_id, attributes):
