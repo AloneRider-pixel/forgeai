@@ -19,7 +19,7 @@ def test_ready() -> None:
         response = client.get("/ready")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ready", "service": "forgeai"}
+    assert response.json() == {"status": "ready", "service": "forgeai", "queue": True}
 
 
 def test_create_review() -> None:

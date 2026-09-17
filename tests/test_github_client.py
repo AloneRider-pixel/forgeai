@@ -1,7 +1,7 @@
 import httpx
 
 from forgeai.models import PullRequestSnapshot
-from forgeai.services.github_client import GitHubClient, GitHubAPIError
+from forgeai.services.github_client import GitHubAPIError, GitHubClient
 
 
 def test_get_pull_request_parses_metadata_and_files() -> None:
@@ -16,12 +16,22 @@ def test_get_pull_request_parses_metadata_and_files() -> None:
                     "additions": 10,
                     "deletions": 2,
                     "changed_files": 2,
+                    "head": {"sha": "abc123", "ref": "feature/auth"},
+                    "base": {"ref": "main"},
                 },
             )
-        return httpx.Response(200, json=[{"filename": "src/auth.py"}, {"filename": "tests/test_auth.py"}])
+        return httpx.Response(
+            200,
+            json=[
+                {"filename": "src/auth.py", "status": "modified"},
+                {"filename": "tests/test_auth.py", "status": "added"},
+            ],
+        )
 
     client = GitHubClient()
-    client._client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    client._client = httpx.Client(
+        transport=httpx.MockTransport(handler), base_url="https://api.github.com"
+    )
 
     snapshot = client.get_pull_request("octocat/hello-world", 42)
 
@@ -31,6 +41,9 @@ def test_get_pull_request_parses_metadata_and_files() -> None:
         title="Add auth",
         state="open",
         draft=True,
+        head_sha="abc123",
+        head_ref="feature/auth",
+        base_ref="main",
         filenames=["src/auth.py", "tests/test_auth.py"],
         additions=10,
         deletions=2,
@@ -48,17 +61,40 @@ def test_changed_files_are_paginated() -> None:
         page = int(request.url.params.get("page", "1"))
         requests.append(page)
         if page == 1:
-            return httpx.Response(200, json=[{"filename": f"src/file_{index}.py"} for index in range(100)])
-        return httpx.Response(200, json=[{"filename": "src/last.py"}])
+            payload = [
+                {"filename": f"src/file_{index}.py", "status": "modified"}
+                for index in range(100)
+            ]
+            return httpx.Response(200, json=payload)
+        return httpx.Response(200, json=[{"filename": "src/last.py", "status": "added"}])
 
     client = GitHubClient()
-    client._client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    client._client = httpx.Client(
+        transport=httpx.MockTransport(handler), base_url="https://api.github.com"
+    )
 
     snapshot = client.get_pull_request("octocat/hello-world", 42)
 
     assert requests == [1, 2]
     assert len(snapshot.filenames) == 101
     assert snapshot.filenames[-1] == "src/last.py"
+    client.close()
+
+
+def test_file_content_decodes_base64() -> None:
+    encoded = "aGVsbG8gd29ybGQ="
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"encoding": "base64", "content": encoded})
+
+    client = GitHubClient()
+    client._client = httpx.Client(
+        transport=httpx.MockTransport(handler), base_url="https://api.github.com"
+    )
+
+    assert client.get_file_content("octocat/hello-world", "src/app.py", "abc123") == (
+        "hello world"
+    )
     client.close()
 
 
@@ -69,7 +105,9 @@ def test_malformed_changed_file_raises() -> None:
         return httpx.Response(200, json=[{"not_filename": "src/bad.py"}])
 
     client = GitHubClient()
-    client._client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    client._client = httpx.Client(
+        transport=httpx.MockTransport(handler), base_url="https://api.github.com"
+    )
 
     try:
         client.get_pull_request("octocat/hello-world", 42)

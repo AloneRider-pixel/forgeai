@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   test:
-    name: Lint, test, and build
+    name: Lint, test, evaluate, and build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -28,10 +28,13 @@ jobs:
         run: pip install -e ".[dev]"
 
       - name: Ruff
-        run: ruff check src tests
+        run: ruff check src tests scripts
 
       - name: Tests
         run: pytest --cov=forgeai --cov-report=term-missing
+
+      - name: Evaluation benchmark
+        run: python scripts/run_eval.py
 
       - name: Docker build
         run: docker build -t forgeai:ci .

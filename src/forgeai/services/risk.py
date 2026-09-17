@@ -6,7 +6,9 @@ def calculate_score(factors: list[RiskFactor]) -> int:
     return min(100, sum(factor.points for factor in factors))
 
 
-def gate_decision(score: int, settings: Settings, findings: list[Finding] | None = None) -> GateDecision:
+def gate_decision(
+    score: int, settings: Settings, findings: list[Finding] | None = None
+) -> GateDecision:
     findings = findings or []
     if any(finding.severity is Severity.CRITICAL for finding in findings):
         return GateDecision.REVIEW_REQUIRED
