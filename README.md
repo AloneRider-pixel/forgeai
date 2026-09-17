@@ -2,6 +2,8 @@
 
 ForgeAI is a production-oriented GitHub pull-request review platform with a deterministic risk engine, bounded repository context, optional LLM planning, and an asynchronous control plane for review history and governed automation.
 
+> Control-plane build: PostgreSQL persistence, Redis jobs, evidence ingestion, approval-gated automation, MCP-style tooling, and OpenTelemetry/Prometheus observability.
+
 ## Architecture
 
 ```text
