@@ -62,7 +62,9 @@ class ReviewService:
                 request.max_context_files,
                 request.max_file_chars,
             )
-            planner = OpenAICompatiblePlanner(self.settings) if request.use_llm else DeterministicPlanner()
+            planner = (
+                OpenAICompatiblePlanner(self.settings) if request.use_llm else DeterministicPlanner()
+            )
             plan = await asyncio.to_thread(planner.plan, baseline, context)
 
             async with self.database.sessions() as session:
@@ -81,7 +83,9 @@ class ReviewService:
             async with self.database.sessions() as session:
                 await self.repository.set_failed(session, job_id, str(exc))
                 if request.delivery_id:
-                    await self.repository.mark_webhook_failed(session, request.delivery_id, str(exc))
+                    await self.repository.mark_webhook_failed(
+                        session, request.delivery_id, str(exc)
+                    )
             raise
 
     async def add_evidence_and_recompute_gate(
