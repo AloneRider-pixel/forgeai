@@ -3,14 +3,23 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from forgeai.main import app
-from forgeai.services.github_client import PullRequestSnapshot
+from forgeai.models import PullRequestSnapshot
 
 
 def test_health() -> None:
     with TestClient(app) as client:
         response = client.get("/health")
-        assert response.status_code == 200
-        assert response.json() == {"status": "ok", "service": "forgeai"}
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "service": "forgeai"}
+
+
+def test_ready() -> None:
+    with TestClient(app) as client:
+        response = client.get("/ready")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready", "service": "forgeai"}
 
 
 def test_create_review() -> None:
@@ -30,5 +39,10 @@ def test_create_review() -> None:
                 "/v1/reviews",
                 json={"repository": "octocat/hello-world", "pull_request": 42},
             )
+
     assert response.status_code == 200
-    assert response.json()["risk_score"] >= 30
+    payload = response.json()
+    assert payload["snapshot"]["pull_request"] == 42
+    assert payload["risk_score"] >= 30
+    assert payload["gate"] in {"review_required", "eligible_for_auto_pass"}
+    assert payload["findings"][0]["rule_id"] == "SEC001"
