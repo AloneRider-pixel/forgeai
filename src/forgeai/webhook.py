@@ -210,5 +210,5 @@ class WebhookDispatcher:
                     stop_event.wait(),
                     timeout=max(self.settings.webhook_dispatch_interval_seconds, 0.1),
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
