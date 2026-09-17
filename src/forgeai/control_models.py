@@ -43,6 +43,8 @@ class ReviewJobRequest(BaseModel):
     use_llm: bool = False
     max_context_files: int = Field(default=5, ge=1, le=10)
     max_file_chars: int = Field(default=12000, ge=1000, le=20000)
+    trigger_source: str = Field(default="api", min_length=1, max_length=100)
+    delivery_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class ReviewJobResponse(BaseModel):
