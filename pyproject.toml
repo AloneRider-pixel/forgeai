@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "forgeai"
-version = "0.4.0"
+version = "0.5.0"
 description = "Production-oriented GitHub pull request risk review platform and control plane"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -22,7 +22,7 @@ dependencies = [
   "opentelemetry-sdk>=1.36,<2",
 ]
 
-[project.optional-dependencies]
+a [project.optional-dependencies]
 dev = [
   "pytest>=8.4,<9",
   "pytest-cov>=6,<7",
