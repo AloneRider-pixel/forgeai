@@ -29,7 +29,11 @@ def test_control_plane_job_evidence_approval_and_execution(tmp_path) -> None:
     settings.database_url = f"sqlite+aiosqlite:///{tmp_path / 'forgeai.db'}"
     changed_files = [ChangedFile(path="src/auth/service.py", additions=20, deletions=3)]
     try:
-        with patch.object(GitHubClient, "get_pull_request_bundle", return_value=(_snapshot(), changed_files)):
+        with patch.object(
+            GitHubClient,
+            "get_pull_request_bundle",
+            return_value=(_snapshot(), changed_files),
+        ):
             with patch.object(
                 GitHubClient,
                 "get_file_content",
@@ -71,7 +75,10 @@ def test_control_plane_job_evidence_approval_and_execution(tmp_path) -> None:
 
                     approved = client.post(
                         f"/v1/jobs/{job_id}/approval/approve",
-                        json={"decided_by": "reviewer", "rationale": "Reviewed evidence and change."},
+                        json={
+                            "decided_by": "reviewer",
+                            "rationale": "Reviewed evidence and change.",
+                        },
                     )
                     assert approved.status_code == 200
                     assert approved.json()["approval"]["state"] == "approved"

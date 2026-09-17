@@ -3,7 +3,13 @@ from __future__ import annotations
 import asyncio
 
 from forgeai.config import Settings
-from forgeai.control_models import ApprovalState, EvidenceFinding, ReviewJobRequest, new_job_id
+from forgeai.control_models import (
+    ApprovalState,
+    EvidenceFinding,
+    JobStatus,
+    ReviewJobRequest,
+    new_job_id,
+)
 from forgeai.db import Database
 from forgeai.evidence import effective_gate
 from forgeai.repository import ControlPlaneRepository
@@ -35,14 +41,16 @@ class ReviewService:
     async def process(self, job_id: str) -> None:
         async with self.database.sessions() as session:
             record = await self.repository.get_job(session, job_id)
-            if record is None:
+            if record is None or record.status != JobStatus.QUEUED.value:
                 return
             request = ReviewJobRequest.model_validate(record.request_json)
             await self.repository.set_running(session, job_id)
 
         try:
             snapshot, changed_files = await asyncio.to_thread(
-                self.github.get_pull_request_bundle, request.repository, request.pull_request
+                self.github.get_pull_request_bundle,
+                request.repository,
+                request.pull_request,
             )
             baseline = await asyncio.to_thread(build_report, snapshot, self.settings)
             context = await asyncio.to_thread(
@@ -72,6 +80,7 @@ class ReviewService:
         except Exception as exc:
             async with self.database.sessions() as session:
                 await self.repository.set_failed(session, job_id, str(exc))
+            raise
 
     async def add_evidence_and_recompute_gate(
         self, job_id: str, findings: list[EvidenceFinding]
@@ -93,7 +102,9 @@ class ReviewService:
             ]
             gate = effective_gate(record.report_json["gate"], evidence)
             record.gate = gate.value
-            record.report_json["gate"] = gate.value
+            updated_report = dict(record.report_json)
+            updated_report["gate"] = gate.value
+            record.report_json = updated_report
             if gate.value == "review_required":
                 await self.repository.upsert_approval(session, job_id, ApprovalState.PENDING)
             else:
