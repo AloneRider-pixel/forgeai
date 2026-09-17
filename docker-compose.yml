@@ -7,3 +7,49 @@ services:
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       RISK_GATE_THRESHOLD: ${RISK_GATE_THRESHOLD:-60}
       HTTP_TIMEOUT_SECONDS: ${HTTP_TIMEOUT_SECONDS:-15}
+      DATABASE_URL: postgresql+asyncpg://forgeai:forgeai@postgres:5432/forgeai
+      REDIS_URL: redis://redis:6379/0
+      ALLOWED_GITHUB_WORKFLOWS: '["ci.yml"]'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  worker:
+    build: .
+    command: ["python", "-m", "forgeai.worker"]
+    environment:
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      DATABASE_URL: postgresql+asyncpg://forgeai:forgeai@postgres:5432/forgeai
+      REDIS_URL: redis://redis:6379/0
+      ALLOWED_GITHUB_WORKFLOWS: '["ci.yml"]'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: forgeai
+      POSTGRES_USER: forgeai
+      POSTGRES_PASSWORD: forgeai
+    volumes:
+      - forgeai-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U forgeai -d forgeai"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:8-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - forgeai-redis:/data
+
+volumes:
+  forgeai-postgres:
+  forgeai-redis:

@@ -1,154 +1,123 @@
 # ForgeAI
 
-ForgeAI is a production-oriented GitHub pull-request review platform. It combines a deterministic risk engine with bounded repository context and an optional LLM review planner.
-
-The architecture is intentionally layered: the core review decision does not depend on an LLM, while model-assisted reasoning is constrained by typed inputs, bounded context, secret redaction, and explicit fallback behavior.
+ForgeAI is a production-oriented GitHub pull-request review platform with a deterministic risk engine, bounded repository context, optional LLM planning, and an asynchronous control plane for review history and governed automation.
 
 ## Architecture
 
 ```text
-                         GitHub Pull Request
-                                  |
-                                  v
-                         +------------------+
-                         |   FastAPI API    |
-                         +--------+---------+
-                                  |
-                     +------------+------------+
-                     |                         |
-                     v                         v
-              Deterministic Core        Assisted Pipeline
-              ------------------        -----------------
-              path classification      PR + changed files
-              security rules            repository content
-              test impact               secret redaction
-              change size               bounded retrieval
-              risk scoring                      |
-              merge gate                       v
-                     |                  Review Planner
-                     |                  /           \
-                     |           deterministic     LLM
-                     |                 \             /
-                     +------------------+----------+
-                                        |
-                                        v
-                              Structured Review Plan
+GitHub PR
+   |
+   v
+FastAPI Control Plane
+   |
+   +--> PostgreSQL ---- review history / evidence / approvals / execution audit
+   |
+   +--> Redis ---------- durable review-job queue
+   |
+   +--> Review Worker -- deterministic analysis -> bounded context -> planner
+   |                                      |
+   |                                      +--> deterministic
+   |                                      +--> OpenAI-compatible LLM
+   |
+   +--> Evidence API --- CodeQL / dependency-review SARIF
+   |
+   +--> Approval Gate -- explicit human approval
+   |
+   +--> Tool Gateway --- allowlisted GitHub Actions dispatch
+              |
+              +--> JSON-RPC /mcp gateway
+
+Observability: OpenTelemetry tracing + Prometheus metrics
 ```
 
-## Current capabilities
+## Capabilities
 
-### Deterministic risk analysis
+### Deterministic review core
 
-- Security-sensitive path detection.
-- Credential and private-key file detection.
-- Infrastructure and deployment change detection.
-- Database and migration change detection.
-- Dependency-manifest change detection.
-- Test-impact heuristics.
-- Large-change surface detection.
-- Explainable 0-100 risk score.
-- Fail-closed gate for critical findings.
-- Stable rule IDs such as `SEC001`, `SEC002`, `OPS001`, and `TEST001`.
+- Security, credential, infrastructure, data, dependency, test-impact, and change-size rules.
+- Stable rule IDs and explainable 0-100 risk scoring.
+- Critical findings and threshold breaches produce a review-required gate.
+- No LLM is required for the baseline decision.
 
-### GitHub integration
+### Repository-aware assisted review
 
-- Pull-request metadata retrieval.
-- Changed-file pagination with bounded page count.
-- Retry handling for rate limits and transient upstream failures.
-- Pull-request head SHA and branch metadata.
-- File-content retrieval for targeted repository context.
-- Explicit validation for malformed upstream payloads.
+- Pull-request changed-file pagination.
+- Head-SHA file retrieval.
+- Bounded context selection and relevance ranking.
+- Private-key and secret-value redaction.
+- Repository content is treated as untrusted data and never executed.
+- OpenAI-compatible planner with structured JSON parsing and deterministic fallback.
 
-### Assisted review pipeline
+### Asynchronous control plane
 
-`POST /v1/reviews/assisted` builds a review bundle from the same deterministic baseline and then retrieves a bounded set of relevant source files.
+`POST /v1/jobs` creates a persisted review job and enqueues it. The queue is Redis-backed when `REDIS_URL` is configured and falls back to an in-process queue for local development.
 
-Context handling includes:
+The worker persists state transitions:
 
-- configurable file and character limits;
-- lexical relevance ranking over changed files;
-- secret-value and private-key redaction;
-- no execution of repository content;
-- explicit prompt-injection boundary in the LLM system instruction.
+`queued -> running -> succeeded | failed`
 
-### LLM planner
+Review reports, plans, evidence, approvals, and action executions remain queryable after the worker finishes.
 
-ForgeAI supports an OpenAI-compatible `/chat/completions` endpoint through configuration. The planner expects structured JSON and falls back to the deterministic planner on missing configuration, transport failure, malformed output, or invalid fields.
+### CodeQL and dependency-review ingestion
 
-No model API key is required to run ForgeAI locally or in CI.
+`POST /v1/jobs/{job_id}/evidence/sarif?source=codeql` accepts SARIF-shaped analysis output. The same endpoint accepts `source=dependency-review`.
 
-### Evaluation harness
+High or critical external evidence can raise the effective gate to `review_required`, even when the deterministic baseline was below the configured threshold.
 
-The deterministic analyzer is evaluated against versioned fixture cases in `evals/cases.jsonl`.
+### Human approval and governed automation
 
-Run:
+ForgeAI exposes an explicit approval state machine:
 
-```bash
-python scripts/run_eval.py
-```
+`pending -> approved | rejected`
 
-The harness reports case count, exact-match cases, precision, and recall.
+Side-effecting tools cannot execute without an approved review job. The tool gateway allowlists workflow IDs through `ALLOWED_GITHUB_WORKFLOWS` and currently exposes `github.workflow_dispatch`.
+
+### MCP-style tool gateway
+
+`POST /mcp` supports JSON-RPC methods `tools/list` and `tools/call`. Tool calls are linked to a persisted review job and require an approved state before the GitHub Actions dispatch adapter is reached.
+
+### Observability
+
+- OpenTelemetry spans around review processing.
+- Prometheus counters for started/completed jobs.
+- Review-duration histogram.
+- `GET /metrics` for Prometheus scraping.
 
 ## API
 
-### `GET /health`
+### Liveness and readiness
 
-Liveness endpoint.
-
-### `GET /ready`
-
-Readiness endpoint.
-
-### `POST /v1/reviews`
-
-Runs the deterministic baseline reviewer.
-
-```json
-{
-  "repository": "octocat/Hello-World",
-  "pull_request": 42
-}
+```text
+GET /health
+GET /ready
+GET /metrics
 ```
 
-### `POST /v1/reviews/assisted`
+### Synchronous review endpoints
 
-Runs deterministic analysis, bounded repository-context retrieval, and review planning.
-
-```json
-{
-  "repository": "octocat/Hello-World",
-  "pull_request": 42,
-  "use_llm": false,
-  "max_context_files": 5,
-  "max_file_chars": 12000
-}
+```text
+POST /v1/reviews
+POST /v1/reviews/assisted
 ```
 
-### `GET /docs`
+### Control-plane endpoints
 
-Interactive OpenAPI documentation.
-
-## Engineering controls
-
-### Separation of concerns
-
-The risk engine only consumes a typed pull-request snapshot. GitHub HTTP behavior is isolated behind an adapter, and planning is isolated behind a planner interface.
-
-### Untrusted repository content
-
-Repository files are treated as data, not instructions. Context is bounded before it reaches a planner, common secret values are redacted, and LLM-assisted planning is optional.
-
-### Deterministic fallback
-
-An external model is an enhancement rather than a dependency for the review decision. A planner failure never removes the deterministic baseline report.
-
-### Bounded upstream access
-
-Changed-file retrieval is paginated with a maximum page count. Context retrieval is limited by both file count and characters per file.
+```text
+POST /v1/jobs
+GET  /v1/jobs
+GET  /v1/jobs/{job_id}
+POST /v1/jobs/{job_id}/evidence
+POST /v1/jobs/{job_id}/evidence/sarif?source=codeql
+POST /v1/jobs/{job_id}/approval/approve
+POST /v1/jobs/{job_id}/approval/reject
+POST /v1/jobs/{job_id}/execute
+GET  /v1/tools
+POST /mcp
+```
 
 ## Local development
 
-Requirements: Python 3.11+, Docker, and a GitHub token for authenticated or private-repository access.
+Python 3.11+ is supported. Docker Compose provides the full control-plane stack.
 
 ```bash
 python -m venv .venv
@@ -158,9 +127,13 @@ cp .env.example .env
 uvicorn forgeai.main:app --reload
 ```
 
-Open `http://localhost:8000/docs`.
+For the full service topology:
 
-Run tests and lint:
+```bash
+docker compose up --build
+```
+
+Run quality checks:
 
 ```bash
 pytest
@@ -168,10 +141,10 @@ ruff check src tests scripts
 python scripts/run_eval.py
 ```
 
-Run with Docker:
+Run a standalone Redis worker:
 
 ```bash
-docker compose up --build
+python -m forgeai.worker
 ```
 
 ## Configuration
@@ -179,14 +152,19 @@ docker compose up --build
 | Variable | Purpose | Default |
 | --- | --- | --- |
 | `GITHUB_TOKEN` | GitHub API token | empty |
-| `RISK_GATE_THRESHOLD` | Maximum baseline risk score before review | `60` |
+| `RISK_GATE_THRESHOLD` | Baseline risk threshold | `60` |
 | `HTTP_TIMEOUT_SECONDS` | GitHub API timeout | `15` |
-| `CONTEXT_MAX_FILES` | Maximum files added to assisted context | `5` |
-| `CONTEXT_MAX_CHARS` | Maximum characters per context file | `12000` |
+| `CONTEXT_MAX_FILES` | Context file bound | `5` |
+| `CONTEXT_MAX_CHARS` | Per-file context bound | `12000` |
 | `LLM_BASE_URL` | OpenAI-compatible API base URL | empty |
 | `LLM_API_KEY` | LLM API key | empty |
-| `LLM_MODEL` | Model name passed to the provider | `gpt-4.1-mini` |
+| `LLM_MODEL` | Model name | `gpt-4.1-mini` |
 | `LLM_TIMEOUT_SECONDS` | LLM request timeout | `30` |
+| `DATABASE_URL` | SQLAlchemy async database URL | `sqlite+aiosqlite:///./forgeai.db` |
+| `REDIS_URL` | Redis connection URL; empty enables local queue | empty |
+| `ALLOWED_GITHUB_WORKFLOWS` | JSON list of workflow IDs permitted for dispatch | `["ci.yml"]` |
+
+For production, use PostgreSQL through an async SQLAlchemy URL such as `postgresql+asyncpg://...` and run the worker as a separate service.
 
 ## Project structure
 
@@ -196,21 +174,26 @@ forgeai/
 │   ├── main.py
 │   ├── config.py
 │   ├── models.py
-│   └── services/
-│       ├── analyzer.py
-│       ├── context.py
-│       ├── evaluator.py
-│       ├── github_client.py
-│       ├── planner.py
-│       └── risk.py
+│   ├── control_models.py
+│   ├── db.py
+│   ├── db_models.py
+│   ├── repository.py
+│   ├── queue.py
+│   ├── evidence.py
+│   ├── evidence_ingest.py
+│   ├── observability.py
+│   ├── tool_gateway.py
+│   ├── services/
+│   │   ├── analyzer.py
+│   │   ├── context.py
+│   │   ├── evaluator.py
+│   │   ├── github_client.py
+│   │   ├── planner.py
+│   │   ├── review_engine.py
+│   │   ├── review_service.py
+│   │   └── risk.py
+│   └── worker.py
 ├── tests/
-│   ├── test_analyzer.py
-│   ├── test_api.py
-│   ├── test_api_assisted.py
-│   ├── test_context.py
-│   ├── test_evaluator.py
-│   ├── test_github_client.py
-│   └── test_planner.py
 ├── evals/cases.jsonl
 ├── scripts/run_eval.py
 ├── .github/workflows/ci.yml
@@ -220,15 +203,13 @@ forgeai/
 └── pyproject.toml
 ```
 
-## Roadmap
+## Security model
 
-1. CodeQL and dependency-review ingestion.
-2. Repository-wide semantic retrieval with embeddings.
-3. Persistent review history and Redis-backed asynchronous jobs.
-4. GitHub Actions execution with explicit approval gates.
-5. MCP tool gateway with allowlisted capabilities.
-6. OpenTelemetry traces, metrics, latency, and model-cost telemetry.
-7. Regression benchmarks across seeded repositories and adversarial prompt-injection fixtures.
+The control plane separates analysis from execution. Repository data is bounded and redacted before optional model use. External analysis is evidence rather than direct authority. Side-effecting automation is allowlisted and requires an explicit persisted approval state. Execution history is stored in PostgreSQL/SQLite so the control plane has an auditable record of what was requested.
+
+## Evaluation
+
+The deterministic analyzer uses versioned cases in `evals/cases.jsonl` and reports precision, recall, and exact-match coverage through `scripts/run_eval.py`. CI runs linting, tests, the evaluation benchmark, and a Docker build.
 
 ## License
 
