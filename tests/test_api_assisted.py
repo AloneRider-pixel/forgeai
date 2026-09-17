@@ -28,7 +28,7 @@ def test_assisted_review_returns_context_and_plan() -> None:
         return_value=(snapshot, changed_files),
     ), patch(
         "forgeai.main.GitHubClient.get_file_content",
-        return_value='def authenticate(token):\n    return token == "super-secret-value"\n',
+        return_value='def authenticate(token):\n    api_key = "super-secret-value"\n    return token == api_key\n',
     ):
         with TestClient(app) as client:
             response = client.post(
