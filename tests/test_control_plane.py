@@ -29,7 +29,13 @@ def _snapshot() -> PullRequestSnapshot:
 
 def test_repository_identifier_is_strict() -> None:
     assert ReviewJobRequest(repository="octocat/hello-world", pull_request=1).repository
-    for repository in ("octocat/hello world", "octocat/hello?ref=1", "../hello/world", "octocat/#repo"):
+    unsafe_repositories = (
+        "octocat/hello world",
+        "octocat/hello?ref=1",
+        "../hello/world",
+        "octocat/#repo",
+    )
+    for repository in unsafe_repositories:
         with pytest.raises(ValidationError):
             ReviewJobRequest(repository=repository, pull_request=1)
 
