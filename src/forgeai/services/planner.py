@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 import httpx
 
 from forgeai.config import Settings
-from forgeai.models import ContextSnippet, Finding, ReviewPlan, ReviewReport
+from forgeai.models import ContextSnippet, ReviewPlan, ReviewReport
 
 
 class ReviewPlanner(ABC):
@@ -18,7 +18,9 @@ class ReviewPlanner(ABC):
 
 def _safe_json(text: str) -> dict[str, object] | None:
     cleaned = text.strip()
-    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(
+        r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.IGNORECASE
+    )
     try:
         payload = json.loads(cleaned)
     except json.JSONDecodeError:
@@ -45,7 +47,9 @@ class DeterministicPlanner(ReviewPlanner):
         actions: list[str] = []
 
         if "security" in categories:
-            verification.append("Trace authentication, authorization, and secret-handling flows.")
+            verification.append(
+                "Trace authentication, authorization, and secret-handling flows."
+            )
             questions.append("Could the change weaken an authorization or credential boundary?")
         if "operations" in categories:
             verification.append("Review deployment, CI, and runtime configuration changes.")
@@ -59,8 +63,6 @@ class DeterministicPlanner(ReviewPlanner):
         if "testing" in categories:
             verification.append("Require targeted tests for changed production behavior.")
             actions.append("Add or update tests covering the changed execution paths.")
-        if report.baseline if False else False:
-            actions.append("Escalate the review to a human approver.")
         if report.gate.value == "review_required":
             actions.append("Require human review before any automated merge action.")
 
