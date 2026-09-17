@@ -146,6 +146,19 @@ class GitHubClient:
         snapshot, _ = self.get_pull_request_bundle(repository, pull_request)
         return snapshot
 
+    def get_repository_tree(self, repository: str, ref: str = "main") -> list[dict[str, Any]]:
+        response = self._request(
+            "GET", f"/repos/{repository}/git/trees/{ref}", params={"recursive": "1"}
+        )
+        payload = self._raise_for_payload(response, "repository-tree")
+        if not isinstance(payload, dict) or not isinstance(payload.get("tree"), list):
+            raise GitHubAPIError("GitHub returned a malformed repository tree")
+        return [
+            item
+            for item in payload["tree"]
+            if isinstance(item, dict) and item.get("type") == "blob"
+        ]
+
     def get_file_content(self, repository: str, path: str, ref: str) -> str | None:
         response = self._request(
             "GET", f"/repos/{repository}/contents/{path}", params={"ref": ref}
