@@ -85,6 +85,39 @@ class ExecutionResponse(BaseModel):
     response: dict[str, object] = Field(default_factory=dict)
 
 
+class RetrievalIndexRequest(BaseModel):
+    repository: str = Field(pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+    ref: str = Field(default="main", min_length=1, max_length=200)
+
+
+class RetrievalIndexResponse(BaseModel):
+    repository: str
+    ref: str
+    documents_indexed: int
+    mode: str
+
+
+class RetrievalSearchRequest(BaseModel):
+    repository: str = Field(pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+    query: str = Field(min_length=3, max_length=1000)
+    ref: str = Field(default="main", min_length=1, max_length=200)
+    top_k: int = Field(default=8, ge=1, le=50)
+
+
+class RetrievalHit(BaseModel):
+    path: str
+    score: float
+    mode: str
+    content: str
+
+
+class RetrievalSearchResponse(BaseModel):
+    repository: str
+    ref: str
+    query: str
+    hits: list[RetrievalHit]
+
+
 class JobDetailResponse(ReviewJobResponse):
     report: dict[str, object] | None = None
     plan: dict[str, object] | None = None
