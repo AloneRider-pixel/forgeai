@@ -10,7 +10,7 @@ ForgeAI combines a deterministic risk engine with bounded repository context, op
 
 > **Portfolio focus:** backend architecture + developer tooling + secure LLM integration + GitHub automation.
 
-> **Control-plane build:** PostgreSQL persistence, Redis jobs, signed GitHub webhook ingestion, idempotent delivery tracking, durable dispatch retries, evidence gating, approval-gated automation, MCP-style tooling, and OpenTelemetry/Prometheus observability.
+> **Control-plane build:** PostgreSQL persistence, Redis jobs, signed GitHub webhook ingestion, idempotent delivery tracking, durable dispatch retries, evidence gating, approval-gated automation, MCP-style tooling, semantic repository retrieval, adversarial security evaluation, RBAC, migrations, and OpenTelemetry/Prometheus observability.
 
 ## Why ForgeAI
 
@@ -38,12 +38,13 @@ FastAPI Ingestion
         |
         +--> Evidence API --- CodeQL / dependency-review SARIF
         |
-        +--> Approval Gate -- explicit human approval
+        +--> Approval Gate -- explicit human approval + RBAC
         |
         +--> Tool Gateway --- allowlisted GitHub Actions dispatch
                    |
                    +--> JSON-RPC /mcp gateway
 
+Repository retrieval: bounded semantic context + policy checks
 Observability: OpenTelemetry tracing + Prometheus metrics
 ```
 
@@ -61,6 +62,7 @@ Observability: OpenTelemetry tracing + Prometheus metrics
 - Pull-request changed-file pagination.
 - Head-SHA file retrieval.
 - Bounded context selection and relevance ranking.
+- Semantic repository retrieval with policy-aware document access.
 - Private-key and secret-value redaction.
 - Repository content is treated as untrusted data and never executed.
 - OpenAI-compatible planner with structured JSON parsing and deterministic fallback.
@@ -117,16 +119,23 @@ ForgeAI exposes an explicit approval state machine:
 
 Side-effecting tools cannot execute without an approved review job. The tool gateway allowlists workflow IDs through `ALLOWED_GITHUB_WORKFLOWS` and currently exposes `github.workflow_dispatch`.
 
+RBAC is enforced for operator actions so authentication and authorization remain part of the control-plane boundary.
+
 ### MCP-style tool gateway
 
 `POST /mcp` supports JSON-RPC methods `tools/list` and `tools/call`. Tool calls are linked to a persisted review job and require an approved state before the GitHub Actions dispatch adapter is reached.
 
 ### Observability
 
-- OpenTelemetry spans around review processing.
+- OpenTelemetry spans around review processing and worker execution.
+- OTLP trace export for external telemetry backends.
 - Prometheus counters for started/completed jobs.
 - Review-duration histogram.
 - `GET /metrics` for Prometheus scraping.
+
+### Adversarial security evaluation
+
+The repository includes a versioned adversarial benchmark corpus and runner covering prompt-injection and tool-abuse cases. CI validates the security benchmark alongside normal quality checks.
 
 ## API
 
@@ -206,10 +215,11 @@ Review analysis, external evidence, human authorization, and tool execution are 
 | GitHub | GitHub API + signed webhook ingestion |
 | Review engine | Deterministic rules + typed models |
 | LLM | OpenAI-compatible provider |
+| Retrieval | Semantic repository retrieval + bounded context |
 | Evidence | SARIF / CodeQL / dependency-review |
-| Quality | Pytest, Ruff, evaluation harness |
-| Security | HMAC webhook verification, secret redaction, prompt-injection boundary, CodeQL |
-| Observability | OpenTelemetry + Prometheus |
+| Quality | Pytest, Ruff, evaluation harness, adversarial security benchmark |
+| Security | HMAC webhook verification, secret redaction, prompt-injection boundary, RBAC, CodeQL |
+| Observability | OpenTelemetry + OTLP + Prometheus |
 | Automation | GitHub Actions + approval gate + MCP-style tool gateway |
 | Infrastructure | Docker, Docker Compose, GitHub Actions |
 
@@ -300,7 +310,7 @@ python -m forgeai.worker
 | `LLM_TIMEOUT_SECONDS` | LLM timeout | `30` |
 | `DATABASE_URL` | SQLAlchemy async database URL | `sqlite+aiosqlite:///./forgeai.db` |
 | `REDIS_URL` | Redis connection URL; empty enables local queue | empty |
-| `ALLOWED_GITHUB_WORKFLOWS` | JSON list of workflow IDs permitted for dispatch | `["ci.yml"]` |
+| `ALLOWED_GITHUB_WORKFLOWS` | JSON list of workflow IDs permitted for dispatch | `[\"ci.yml\"]` |
 | `WEBHOOK_DISPATCH_INTERVAL_SECONDS` | Pending delivery poll interval | `2` |
 | `WEBHOOK_DISPATCH_MAX_ATTEMPTS` | Maximum queue-dispatch attempts | `5` |
 
@@ -312,15 +322,15 @@ The control plane separates ingestion, analysis, evidence, authorization, and ex
 
 ## Evaluation
 
-The deterministic analyzer uses versioned cases in `evals/cases.jsonl` and reports precision, recall, and exact-match coverage through `scripts/run_eval.py`. CI runs linting, tests, the evaluation benchmark, and a Docker build.
+The deterministic analyzer uses versioned cases in `evals/cases.jsonl` and reports precision, recall, and exact-match coverage through `scripts/run_eval.py`. The security evaluation uses a separate versioned adversarial corpus. CI validates linting, tests, evaluation workflows, and a Docker build.
 
-## Next engineering layer
+## Roadmap
 
-- Repository-wide semantic retrieval with embeddings.
-- Adversarial prompt-injection and tool-abuse benchmark suite.
-- OTLP exporter and trace correlation across API, webhook dispatcher, worker, and tool execution.
-- Authenticated operator RBAC for approvals and execution.
-- Production database migrations and operational dashboards.
+- Broader provider adapters and richer review-policy configuration.
+- More repository languages and package ecosystems in deterministic analysis.
+- Expanded benchmark scenarios with published methodology and reproducible runs.
+- Multi-tenant deployment examples and production hardening guidance.
+- Deeper cost and latency telemetry for model-assisted review paths.
 
 ## License
 
