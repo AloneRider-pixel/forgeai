@@ -24,7 +24,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="ForgeAI",
-    version="0.1.0",
+    version="0.2.0",
     description="Production-oriented GitHub pull request risk review platform.",
     lifespan=lifespan,
 )
@@ -33,6 +33,11 @@ app = FastAPI(
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "forgeai"}
+
+
+@app.get("/ready")
+def ready() -> dict[str, str]:
+    return {"status": "ready", "service": "forgeai"}
 
 
 @app.post("/v1/reviews", response_model=ReviewReport)
@@ -45,7 +50,7 @@ def create_review(request: PullRequestRequest) -> ReviewReport:
 
     findings, factors = analyze(snapshot)
     score = calculate_score(factors)
-    gate = gate_decision(score, settings)
+    gate = gate_decision(score, settings, findings)
 
     return ReviewReport(
         snapshot=snapshot,
