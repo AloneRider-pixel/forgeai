@@ -48,6 +48,9 @@ jobs:
       - name: Security evaluation
         run: python scripts/run_security_eval.py --output artifacts/security.json
 
+      - name: Verify evaluation evidence
+        run: python scripts/verify_evidence.py --benchmark artifacts/benchmark.json --security artifacts/security.json
+
       - name: Docker build
         run: docker build -t forgeai:ci .
 
