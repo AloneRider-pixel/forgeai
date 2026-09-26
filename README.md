@@ -152,6 +152,12 @@ Deterministic review cases are versioned in `evals/cases.jsonl`. The repository 
 - Multi-tenant deployment examples and additional policy controls.
 - Deeper latency and cost telemetry for model-assisted paths.
 
+## Evidence and reproducibility
+
+The deterministic review engine and evaluation harness are intentionally separated from optional LLM assistance. Any published risk-quality, detection, latency, or cost result should identify the evaluation corpus/version, methodology, environment, run command, and commit-produced artifact. Synthetic and adversarial fixtures are test evidence, not production measurements.
+
+See [Evidence Policy](docs/evidence-policy.md).
+
 ## License
 
 MIT
