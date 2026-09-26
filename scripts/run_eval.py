@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from forgeai.models import PullRequestSnapshot
@@ -45,7 +45,7 @@ def main() -> None:
         'precision': round(metrics.precision, 6),
         'recall': round(metrics.recall, 6),
         'commit': os.getenv('GITHUB_SHA'),
-        'generated_at_utc': datetime.now(timezone.utc).isoformat(),
+        'generated_at_utc': datetime.now(UTC).isoformat(),
     }
 
     print(f"cases={payload['cases']}")
