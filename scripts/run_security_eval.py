@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from forgeai.security import safe_for_tool_execution, scan_untrusted_content
+
 CASES = Path(__file__).parents[1] / 'evals' / 'security_cases.json'
 
 
