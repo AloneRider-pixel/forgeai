@@ -41,7 +41,7 @@ def main() -> None:
         'dataset': str(dataset_path.relative_to(root)),
         'cases': metrics.cases,
         'exact_match_cases': metrics.exact_match_cases,
-        'exact_match_rate': round(metrics.exact_match_cases / metrics.cases, 6) if metrics.cases else 0.0,
+        'exact_match_rate': (round(metrics.exact_match_cases / metrics.cases, 6) if metrics.cases else 0.0),
         'precision': round(metrics.precision, 6),
         'recall': round(metrics.recall, 6),
         'commit': os.getenv('GITHUB_SHA'),
