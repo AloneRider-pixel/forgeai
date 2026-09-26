@@ -1,9 +1,8 @@
-# ruff: noqa: I001
 from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 import os
 
@@ -39,7 +38,7 @@ def main() -> None:
         'cases': len(cases),
         'passed': True,
         'commit': os.getenv('GITHUB_SHA'),
-        'generated_at_utc': datetime.now(timezone.utc).isoformat(),
+        'generated_at_utc': datetime.now(UTC).isoformat(),
     }
     print(f"security evaluation passed: {len(cases)} cases")
     if args.output:
