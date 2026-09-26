@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from datetime import UTC, datetime
@@ -35,10 +36,12 @@ def main() -> None:
     dataset_path = root / 'evals' / 'cases.jsonl'
     cases = load_cases(dataset_path)
     metrics = evaluate(cases)
+    dataset_sha256 = hashlib.sha256(dataset_path.read_bytes()).hexdigest()
 
     payload = {
         'evaluation': 'deterministic-rule-engine',
         'dataset': str(dataset_path.relative_to(root)),
+        'dataset_sha256': dataset_sha256,
         'cases': metrics.cases,
         'exact_match_cases': metrics.exact_match_cases,
         'exact_match_rate': (
