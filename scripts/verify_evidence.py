@@ -37,7 +37,13 @@ def main() -> None:
         raise SystemExit("Unexpected benchmark evaluation type")
     cases = benchmark.get("cases")
     exact = benchmark.get("exact_match_cases")
-    valid_counts = isinstance(cases, int) and cases > 0 and isinstance(exact, int) and 0 <= exact <= cases
+    valid_counts = (
+        isinstance(cases, int)
+        and cases > 0
+        and isinstance(exact, int)
+        and 0 <= exact <= cases
+    )
+    if not valid_counts:
         raise SystemExit("Benchmark case counts are invalid")
     for key in ("precision", "recall", "exact_match_rate"):
         value = benchmark.get(key)
