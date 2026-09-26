@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -38,7 +37,7 @@ def main() -> None:
         raise SystemExit("Unexpected benchmark evaluation type")
     cases = benchmark.get("cases")
     exact = benchmark.get("exact_match_cases")
-    if not isinstance(cases, int) or cases <= 0 or not isinstance(exact, int) or not 0 <= exact <= cases:
+    valid_counts = isinstance(cases, int) and cases > 0 and isinstance(exact, int) and 0 <= exact <= cases
         raise SystemExit("Benchmark case counts are invalid")
     for key in ("precision", "recall", "exact_match_rate"):
         value = benchmark.get(key)
