@@ -4,22 +4,16 @@
 [![CodeQL](https://github.com/AloneRider-pixel/forgeai/actions/workflows/codeql.yml/badge.svg)](https://github.com/AloneRider-pixel/forgeai/actions/workflows/codeql.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**Production-oriented GitHub pull-request risk, review, and governance platform.**
+Production-oriented GitHub pull-request risk, review, and governance platform.
 
-ForgeAI combines a deterministic risk engine with bounded repository context, optional LLM-assisted planning, and an asynchronous control plane for persisted review workflows and governed automation.
+ForgeAI keeps the baseline risk decision deterministic while using optional model-assisted planning, bounded repository context, persisted workflows, and approval-gated automation.
 
-> **Portfolio focus:** Python backend architecture · developer tooling · secure LLM integration · GitHub automation.
-
-## Problem
-
-LLM-assisted code review creates a new trust boundary: repository content must be treated as untrusted data, while the baseline risk decision should remain deterministic and reproducible.
-
-ForgeAI separates those concerns:
+## Core architecture
 
 ```text
 GitHub PR
    ↓
-Signed webhook → persisted delivery
+Signed webhook / persisted delivery
    ↓
 Deterministic risk analysis
    ↓
@@ -32,84 +26,49 @@ Evidence + approval gate
 Allowlisted automation
 ```
 
-## Current capabilities
+## Capabilities
 
-### Deterministic review engine
-
-- Security, credential, infrastructure, data, dependency, test-impact, and change-size rules.
-- Stable rule IDs with explainable 0–100 risk scoring.
-- Critical findings and threshold breaches can require review.
-- Baseline analysis does not depend on an external LLM.
-
-### Repository-aware review
-
-- Pull-request changed-file pagination and head-SHA retrieval.
-- Bounded semantic repository retrieval with policy-aware access.
-- Private-key and secret-value redaction.
-- Repository content treated as data, never executed.
-- Optional OpenAI-compatible planner with structured output and deterministic fallback.
-
-### Control plane
-
-- PostgreSQL persistence with Alembic migrations.
-- Redis-backed review queue with local in-process fallback.
+- Security, credential, infrastructure, data, dependency, test-impact, and change-size analysis.
+- Stable rule IDs and explainable risk factors.
+- Pull-request-aware repository retrieval with bounded context and secret redaction.
+- PostgreSQL persistence, Alembic migrations, and Redis-backed review queues.
 - Signed GitHub webhook ingestion with idempotent delivery tracking.
-- Durable retry/dead-letter handling for dispatch failures.
-- Evidence ingestion for CodeQL/dependency-review SARIF.
+- CodeQL/dependency-review evidence ingestion.
 - Approval-gated side effects with operator RBAC.
-- JSON-RPC `/mcp` gateway with an allowlisted GitHub Actions dispatch adapter.
+- OpenTelemetry and Prometheus instrumentation.
+- Versioned deterministic and adversarial evaluation corpora.
 
-### Security and evaluation
-
-- HMAC SHA-256 webhook verification.
-- Prompt-injection and tool-abuse boundaries.
-- Versioned deterministic evaluation cases.
-- Versioned adversarial security benchmark corpus.
-- Structured fallback behavior when the model is unavailable.
-
-### Observability
-
-- OpenTelemetry tracing and OTLP export.
-- Prometheus metrics at `/metrics`.
-- Review-duration and job lifecycle telemetry.
-
-## Technology stack
+## Stack
 
 | Area | Technology |
 |---|---|
-| Backend | Python 3.11+, FastAPI, SQLAlchemy async |
-| Data | PostgreSQL, SQLite local, Alembic |
-| Queue | Redis, asyncio local queue |
-| GitHub | GitHub API, signed webhooks |
-| AI | OpenAI-compatible LLM, bounded retrieval |
-| Security | HMAC, secret redaction, RBAC, CodeQL |
-| Observability | OpenTelemetry, OTLP, Prometheus |
-| Quality | PyTest, Ruff, evaluation harness |
-| Infrastructure | Docker, Docker Compose, GitHub Actions |
+| Backend | Python, FastAPI, SQLAlchemy |
+| Data | PostgreSQL, SQLite, Alembic |
+| Queue | Redis / asyncio |
+| GitHub | REST API, signed webhooks |
+| AI | OpenAI-compatible model, bounded retrieval |
+| Security | HMAC, redaction, RBAC, CodeQL |
+| Quality | Pytest, Ruff, evaluation harness |
+| Delivery | Docker, GitHub Actions |
 
-## Repository structure
+## Repository layout
 
 ```text
-forgeai/
-├── src/forgeai/
-│   ├── services/          # review, risk, retrieval, planning
-│   ├── webhook.py         # signed GitHub webhook boundary
-│   ├── worker.py          # asynchronous review worker
-│   ├── evidence*.py       # evidence ingestion
-│   ├── tool_gateway.py    # approval-gated automation
-│   └── observability.py   # traces and metrics
-├── tests/
-├── evals/cases.jsonl
-├── scripts/run_eval.py
-├── docs/
-├── migrations/
-├── .github/workflows/
-├── Dockerfile
-├── docker-compose.yml
-└── pyproject.toml
+src/forgeai/
+  services/         # analysis, risk, retrieval, planning
+  webhook.py        # signed GitHub webhook boundary
+  worker.py         # asynchronous review worker
+  evidence*.py      # security evidence ingestion
+  tool_gateway.py   # approval-gated automation
+  observability.py  # telemetry
+tests/
+evals/
+scripts/
+migrations/
+docs/
 ```
 
-## Local development
+## Quick start
 
 ```bash
 git clone https://github.com/AloneRider-pixel/forgeai.git
@@ -121,51 +80,50 @@ cp .env.example .env
 uvicorn forgeai.main:app --reload
 ```
 
-Full control-plane stack:
+Docker:
 
 ```bash
 docker compose up --build
 ```
 
-Quality checks:
+## Verification
 
 ```bash
-pytest
-ruff check src tests scripts
-python scripts/run_eval.py
+ruff check src tests scripts migrations
+pytest --cov=forgeai --cov-report=term-missing
+alembic upgrade head
+python scripts/run_eval.py --output artifacts/benchmark.json
+python scripts/run_security_eval.py --output artifacts/security.json
+python scripts/verify_evidence.py --benchmark artifacts/benchmark.json --security artifacts/security.json
 ```
 
-Interactive API docs are available at `/docs`.
+These commands mirror the repository CI gates.
 
 ## Security model
 
-ForgeAI keeps ingestion, analysis, evidence, authorization, and execution as separate stages. GitHub webhook authenticity is verified before event parsing; repository context is bounded and redacted before optional model use; external analysis is treated as evidence; and side-effecting automation requires explicit persisted approval and RBAC authorization.
+Repository content, pull-request text, logs, and model output are untrusted data. Webhook authenticity is verified before processing, retrieval is bounded and redacted, and side-effecting automation requires explicit persisted approval and authorization.
 
-## Evaluation
+## Evaluation integrity
 
-Deterministic review cases are versioned in `evals/cases.jsonl`. The repository also contains a separate adversarial corpus for prompt-injection and tool-abuse testing. Published performance numbers should be tied to a specific dataset version, methodology, and reproducible run.
+Risk scores and evaluation results are meaningful only in the context of their corpus, methodology, environment, and version. Synthetic/adversarial fixtures are engineering evidence, not production benchmark claims.
+
+See [Evidence Policy](docs/evidence-policy.md).
 
 ## Roadmap
 
-- Broader provider and repository-language adapters.
-- Expanded benchmark coverage with published methodology.
-- Multi-tenant deployment examples and additional policy controls.
-- Deeper latency and cost telemetry for model-assisted paths.
+- Broader repository/language adapters.
+- More benchmark coverage with published methodology.
+- Multi-tenant policy controls.
+- Deeper model latency/cost telemetry.
 
-## Evidence and reproducibility
+## Review path
 
-The deterministic review engine and evaluation harness are intentionally separated from optional LLM assistance. Any published risk-quality, detection, latency, or cost result should identify the evaluation corpus/version, methodology, environment, run command, and commit-produced artifact. Synthetic and adversarial fixtures are test evidence, not production measurements.
+Start with [architecture](docs/architecture.md), [next layer](docs/next-layer.md), and [SECURITY.md](SECURITY.md). Preserve deterministic policy decisions and approval gates when changing agent behavior.
 
-See [Evidence Policy](docs/evidence-policy.md).
+## Maintenance standard
+
+Keep repository content untrusted, actions immutable, policy decisions deterministic, and execution authority separate from analysis.
 
 ## License
 
 MIT
-
-## Repository review path
-
-Start with [architecture](docs/architecture.md), [next layer](docs/next-layer.md), and [SECURITY.md](SECURITY.md). Validate `pytest`, Ruff, the deterministic evaluation suite, and the adversarial security corpus before changing analysis or tool-gateway behavior.
-
-## Maintenance standard
-
-Keep deterministic policy decisions independent of optional model output. Repository content, PR text, logs, and model responses remain untrusted data and must not bypass approval-gated side effects.
