@@ -161,3 +161,11 @@ See [Evidence Policy](docs/evidence-policy.md).
 ## License
 
 MIT
+
+## Repository review path
+
+Start with [architecture](docs/architecture.md), [next layer](docs/next-layer.md), and [SECURITY.md](SECURITY.md). Validate `pytest`, Ruff, the deterministic evaluation suite, and the adversarial security corpus before changing analysis or tool-gateway behavior.
+
+## Maintenance standard
+
+Keep deterministic policy decisions independent of optional model output. Repository content, PR text, logs, and model responses remain untrusted data and must not bypass approval-gated side effects.
