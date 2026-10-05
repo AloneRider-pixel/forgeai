@@ -6,7 +6,7 @@
 
 Production-oriented platform for pull-request risk analysis, evidence collection, reviewer guidance, governance, and approval-gated automation.
 
-ForgeAI deliberately keeps policy decisions deterministic while allowing bounded model assistance for planning and repository context.
+ForgeAI keeps policy decisions deterministic while allowing bounded model assistance for planning and repository context.
 
 ## Core flow
 
@@ -26,7 +26,7 @@ Evidence + approval gate
 Allowlisted automation
 ```
 
-## Capabilities
+## What it demonstrates
 
 - Security, credential, infrastructure, dependency, test-impact, and change-size analysis.
 - Stable rule IDs and explainable risk factors.
@@ -37,6 +37,24 @@ Allowlisted automation
 - Operator RBAC and approval-gated side effects.
 - OpenTelemetry/Prometheus instrumentation.
 - Deterministic and adversarial evaluation corpora.
+
+## Architecture
+
+```mermaid
+graph TB
+    GH[GitHub] --> WEBHOOK[Signed Webhook]
+    WEBHOOK --> API[FastAPI]
+    API --> RULES[Deterministic Rules]
+    API --> CONTEXT[Bounded Repository Context]
+    CONTEXT --> REDACT[Redaction]
+    API --> EVIDENCE[Security / CI Evidence]
+    API --> MODEL[Bounded Model Planning]
+    MODEL --> REVIEW[Explainable Review]
+    REVIEW --> APPROVAL[Explicit Approval]
+    APPROVAL --> AUTO[Allowlisted Automation]
+    API --> PG[(PostgreSQL)]
+    API --> REDIS[(Redis)]
+```
 
 ## Stack
 
@@ -100,7 +118,9 @@ python scripts/verify_evidence.py --benchmark artifacts/benchmark.json --securit
 
 ## Security model
 
-Pull-request text, repository files, logs, dependency metadata, and model output are untrusted. Verify webhook authenticity before processing, bound and redact retrieved data, and keep side effects behind explicit persisted approval and authorization.
+Pull-request text, repository files, logs, dependency metadata, webhook payloads, and model output are untrusted.
+
+Verify webhook authenticity before processing, bound and redact retrieved data, keep policy evaluation deterministic, and keep side effects behind explicit authorization and persisted approval.
 
 ## Evaluation integrity
 
@@ -115,6 +135,10 @@ See [docs/evidence-policy.md](docs/evidence-policy.md).
 - [Assisted review](docs/assisted-review.md)
 - [Next layer](docs/next-layer.md)
 - [Security](SECURITY.md)
+
+## Contribution standard
+
+Any change to a risk rule, webhook contract, evidence source, redaction boundary, or automation side effect should include targeted regression coverage and an explicit security review.
 
 ## Roadmap
 
