@@ -34,7 +34,7 @@ Allowlisted automation
 - Signed webhook ingestion with persisted delivery idempotency.
 - PostgreSQL persistence, migrations, and Redis-backed queues.
 - CodeQL/dependency-review evidence ingestion.
-- Operator RBAC and approval-gated side effects.
+- Operator RBAC and approval-gated side effects. RBAC is off by default (`AUTH_REQUIRED=false`); set `AUTH_REQUIRED=true` outside local development.
 - OpenTelemetry/Prometheus instrumentation.
 - Deterministic and adversarial evaluation corpora.
 
